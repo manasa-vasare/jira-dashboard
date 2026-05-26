@@ -246,7 +246,8 @@ body {
 }
 
 .toast {
-  background: rgba(11, 15, 26, 0.95);
+  background: var(--bg-sidebar);
+  border: 1px solid var(--border-glass);
   border-left: 4px solid var(--primary);
   color: var(--text-main);
   padding: 14px 20px;
