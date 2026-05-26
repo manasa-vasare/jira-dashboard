@@ -25,6 +25,8 @@ import {
   FaEnvelope,
   FaPaperPlane,
   FaExclamationTriangle,
+  FaSun,
+  FaMoon,
 } from "react-icons/fa";
 
 import {
@@ -72,6 +74,13 @@ const getDeadlineInfo = (dueDate, statusName) => {
 function App() {
   // Navigation & UI States
   const [activeView, setActiveView] = useState("dashboard"); // "dashboard" or "kanban"
+  const [theme, setTheme] = useState(() => localStorage.getItem("app-theme") || "dark");
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem("app-theme", theme);
+  }, [theme]);
+
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [currentUser, setCurrentUser] = useState(null);
   const [connectionStatus, setConnectionStatus] = useState("Connecting to Jira...");
@@ -944,6 +953,27 @@ function App() {
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+            {/* Theme Toggle Button */}
+            <button
+              onClick={() => setTheme(prev => prev === "dark" ? "light" : "dark")}
+              className="btn-secondary"
+              style={{
+                padding: "10px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                borderRadius: "10px",
+                background: "var(--bg-card)",
+                borderColor: "var(--border-glass)",
+                color: "var(--primary)",
+                cursor: "pointer",
+                transition: "var(--transition-smooth)"
+              }}
+              title={`Switch to ${theme === "dark" ? "Light" : "Dark"} Mode`}
+            >
+              {theme === "dark" ? <FaSun size={14} /> : <FaMoon size={14} />}
+            </button>
+
             {/* Live Refresh button */}
             <button
               onClick={() => fetchJiraTasks(false)}
@@ -1206,7 +1236,7 @@ function App() {
                               ))}
                             </Pie>
                             <Tooltip
-                              contentStyle={{ background: "#0b0e14", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "8px" }}
+                              contentStyle={{ background: "var(--bg-sidebar)", border: "1px solid var(--border-glass)", borderRadius: "8px", color: "var(--text-main)" }}
                             />
                             <Legend verticalAlign="bottom" height={36} />
                           </PieChart>
@@ -1228,7 +1258,7 @@ function App() {
                             <XAxis dataKey="name" stroke="var(--text-muted)" fontSize={12} />
                             <YAxis stroke="var(--text-muted)" fontSize={12} allowDecimals={false} />
                             <Tooltip
-                              contentStyle={{ background: "#0b0e14", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "8px" }}
+                              contentStyle={{ background: "var(--bg-sidebar)", border: "1px solid var(--border-glass)", borderRadius: "8px", color: "var(--text-main)" }}
                               cursor={{ fill: "rgba(255,255,255,0.02)" }}
                             />
                             <Bar dataKey="count" radius={[6, 6, 0, 0]}>
@@ -1255,7 +1285,7 @@ function App() {
                             <XAxis type="number" stroke="var(--text-muted)" fontSize={12} allowDecimals={false} />
                             <YAxis dataKey="name" type="category" stroke="var(--text-muted)" fontSize={12} width={100} />
                             <Tooltip
-                              contentStyle={{ background: "#0b0e14", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "8px" }}
+                              contentStyle={{ background: "var(--bg-sidebar)", border: "1px solid var(--border-glass)", borderRadius: "8px", color: "var(--text-main)" }}
                               cursor={{ fill: "rgba(255,255,255,0.02)" }}
                             />
                             <Bar dataKey="tasks" fill="var(--primary)" radius={[0, 4, 4, 0]} />

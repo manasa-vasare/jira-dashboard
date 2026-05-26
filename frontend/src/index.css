@@ -50,6 +50,55 @@
   --shadow-glow: 0 0 20px rgba(45, 212, 191, 0.12);
 }
 
+[data-theme="light"] {
+  /* Premium Light Mode HSL Color Palette - Oceanic Teal & Peach Coral (Aurora Nordic Light) */
+  --bg-main: #f0f7f7;          /* Soft icy white-grey */
+  --bg-sidebar: #e1eded;       /* Crisp light grey-teal */
+  --bg-card: rgba(255, 255, 255, 0.85); /* Translucent bright white */
+  --bg-card-hover: rgba(255, 255, 255, 0.98);
+  --border-glass: rgba(13, 148, 136, 0.12); /* More visible teal border */
+  --border-glow: rgba(13, 148, 136, 0.35);
+  --border-glow-hover: rgba(249, 115, 22, 0.55);
+
+  --primary: #0d9488;         /* High-contrast Teal */
+  --primary-glow: rgba(13, 148, 136, 0.15);
+  --secondary: #0891b2;       /* High-contrast Cyan */
+  --accent: #ea580c;          /* High-contrast Orange */
+  
+  --text-main: #0f172a;       /* Slate Dark 900 */
+  --text-muted: #475569;      /* Slate Grey 600 */
+  --text-dim: #94a3b8;        /* Slate Light 400 */
+
+  /* Status Colors */
+  --status-backlog-bg: rgba(234, 88, 12, 0.08);
+  --status-backlog-border: rgba(234, 88, 12, 0.2);
+  --status-backlog-text: #c2410c;
+
+  --status-progress-bg: rgba(13, 148, 136, 0.08);
+  --status-progress-border: rgba(13, 148, 136, 0.2);
+  --status-progress-text: #0f766e;
+
+  --status-done-bg: rgba(8, 145, 178, 0.08);
+  --status-done-border: rgba(8, 145, 178, 0.2);
+  --status-done-text: #0e7490;
+
+  /* Priority Colors */
+  --priority-high-bg: rgba(220, 38, 38, 0.08);
+  --priority-high-border: rgba(220, 38, 38, 0.2);
+  --priority-high-text: #b91c1c;
+
+  --priority-medium-bg: rgba(234, 88, 12, 0.08);
+  --priority-medium-border: rgba(234, 88, 12, 0.2);
+  --priority-medium-text: #c2410c;
+
+  --priority-low-bg: rgba(13, 148, 136, 0.08);
+  --priority-low-border: rgba(13, 148, 136, 0.2);
+  --priority-low-text: #0f766e;
+
+  --shadow-premium: 0 10px 30px -10px rgba(15, 23, 42, 0.1);
+  --shadow-glow: 0 0 20px rgba(13, 148, 136, 0.06);
+}
+
 * {
   box-sizing: border-box;
   margin: 0;
