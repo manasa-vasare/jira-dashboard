@@ -134,6 +134,8 @@ function App() {
   const [isProvisioning, setIsProvisioning] = useState(false);
   const [isRespondingToProject, setIsRespondingToProject] = useState(false);
 
+
+
   // Collaborative Sync Meetings states
   const [meetings, setMeetings] = useState([]);
   const [isMeetingsLoading, setIsMeetingsLoading] = useState(false);
@@ -458,7 +460,6 @@ function App() {
       setIsModeratorLoading(false);
     }
   };
-
   // Fetch upcoming scheduled FIP sync meetings
   const fetchMeetings = async (silent = false) => {
     if (!silent) setIsMeetingsLoading(true);
@@ -626,6 +627,10 @@ function App() {
   // Handle Search and Filter logic
   const filteredTasks = useMemo(() => {
     return tasks.filter((task) => {
+      // Exclude Epics — they are parent containers, not individual work items
+      const issueType = task.fields?.issuetype?.name || task.fields?.issueType || "";
+      if (issueType === "Epic") return false;
+
       const summaryMatch = task.fields.summary
         ?.toLowerCase()
         .includes(searchQuery.toLowerCase());
@@ -722,23 +727,21 @@ function App() {
     const campusId = currentBoardId;
     const spoke = SPOKES[campusId];
     if (!spoke) return [];
-    return moderatorProjects.filter(p => {
-      if (p.allocations && p.allocations.length > 0) {
-        return p.allocations.some(a => a.targetCampusId === campusId && a.status === "Proposed");
-      }
-      return p.status === "Proposed" && p.targetCampusId === campusId;
-    });
+    // ONLY use allocations[] — root-level targetCampusId is unreliable for multi-campus projects
+    return moderatorProjects.filter(p =>
+      Array.isArray(p.allocations) &&
+      p.allocations.some(a => a.targetCampusId === campusId && a.status === "Proposed")
+    );
   }, [moderatorProjects, activeWorkspace, currentBoardId]);
 
   const acceptedProjectsForSpoke = useMemo(() => {
     if (activeWorkspace === "hub" || activeWorkspace === "moderator" || activeWorkspace === "meetings" || activeWorkspace === "playground") return [];
     const campusId = currentBoardId;
-    return moderatorProjects.filter(p => {
-      if (p.allocations && p.allocations.length > 0) {
-        return p.allocations.some(a => a.targetCampusId === campusId && a.status === "Active");
-      }
-      return p.status === "Active" && p.targetCampusId === campusId;
-    });
+    // ONLY use allocations[] — root-level targetCampusId is unreliable for multi-campus projects
+    return moderatorProjects.filter(p =>
+      Array.isArray(p.allocations) &&
+      p.allocations.some(a => a.targetCampusId === campusId && a.status === "Active")
+    );
   }, [moderatorProjects, activeWorkspace, currentBoardId]);
 
   // Dynamically resolve child checklist issues for both Epic and Standard parent tasks
@@ -2338,6 +2341,7 @@ function App() {
               setSelectedAssignProject(proj);
               setIsAssignModalOpen(true);
             }}
+            triggerToast={triggerToast}
           />
         ) : activeWorkspace === "meetings" ? (
           <MeetingsPortalView
@@ -2895,6 +2899,7 @@ function App() {
                     </div>
                   </div>
                 )}
+
 
                 {/* Analytical Charts Grid */}
                 <div style={{
@@ -4451,6 +4456,7 @@ function App() {
         </div>
       )}
 
+
     </div>
   );
 }
@@ -5326,6 +5332,7 @@ function HubDashboardView({ metrics, loading, onRefresh, moderatorProjects }) {
         </div>
       </div>
 
+
     </div>
   );
 }
@@ -5365,11 +5372,7 @@ function ProgressBadge({ pct }) {
   );
 }
 
-// ==========================================
-// B2B MODERATOR PORTAL COMPONENTS
-// ==========================================
-
-function ModeratorDashboardView({ projects, loading, onRefresh, onAssignClick }) {
+function ModeratorDashboardView({ projects, loading, onRefresh, onAssignClick, triggerToast }) {
   const [activeTab, setActiveTab] = useState("proposals"); // "proposals" or "deadlines"
   const [auditLoading, setAuditLoading] = useState(false);
   const [auditResults, setAuditResults] = useState(null);
@@ -5489,17 +5492,14 @@ function ModeratorDashboardView({ projects, loading, onRefresh, onAssignClick })
             <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: "13px" }}>
               <thead>
                 <tr style={{ borderBottom: "1.5px solid var(--border-glass)" }}>
-                  <th style={{ padding: "12px 16px", color: "var(--text-muted)", fontWeight: "700", width: "150px" }}>Company / Partner</th>
-                  <th style={{ padding: "12px 16px", color: "var(--text-muted)", fontWeight: "700" }}>Project Details</th>
-                  <th style={{ padding: "12px 16px", color: "var(--text-muted)", fontWeight: "700", width: "110px", textAlign: "center" }}>Funding</th>
-                  <th style={{ padding: "12px 16px", color: "var(--text-muted)", fontWeight: "700", width: "110px", textAlign: "center" }}>Duration</th>
-                  <th style={{ padding: "12px 16px", color: "var(--text-muted)", fontWeight: "700", width: "150px", textAlign: "center" }}>Status</th>
-                  <th style={{ padding: "12px 16px", color: "var(--text-muted)", fontWeight: "700", width: "160px", textAlign: "center" }}>Action</th>
+                  <th style={{ padding: "12px 16px", color: "var(--text-muted)", fontWeight: "700", width: "300px" }}>Project Details</th>
+                  <th style={{ padding: "12px 16px", color: "var(--text-muted)", fontWeight: "700", textAlign: "left" }}>Campus Deployments, Keys, Deadlines & Progress Metrics</th>
+                  <th style={{ padding: "12px 16px", color: "var(--text-muted)", fontWeight: "700", textAlign: "center", width: "150px" }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {projects.map((proj, idx) => {
-                  const isAssigned = proj.status !== "Pending Assignment";
+                  const activeAllocations = proj.allocations || [];
                   return (
                     <tr
                       key={proj.id}
@@ -5510,9 +5510,9 @@ function ModeratorDashboardView({ projects, loading, onRefresh, onAssignClick })
                       }}
                       className="table-row-hover"
                     >
-                      {/* Company Column */}
-                      <td style={{ padding: "16px" }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                      {/* Project Details */}
+                      <td style={{ padding: "16px", verticalAlign: "top" }}>
+                        <div style={{ display: "flex", alignItems: "flex-start", gap: "12px" }}>
                           {proj.logoUrl && (
                             <img
                               src={proj.logoUrl}
@@ -5521,103 +5521,124 @@ function ModeratorDashboardView({ projects, loading, onRefresh, onAssignClick })
                               onError={(e) => { e.target.style.display = 'none'; }}
                             />
                           )}
-                          <span style={{ fontWeight: "700", color: "var(--text-main)" }}>{proj.company}</span>
+                          <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                            <span style={{ fontWeight: "800", color: "var(--primary)", fontSize: "14px" }}>{proj.title}</span>
+                            <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>
+                              Sponsor: <strong>{proj.company}</strong> | Budget: <strong>{proj.budget}</strong> | Duration: <strong>{proj.duration}</strong>
+                            </span>
+                            <p style={{ color: "var(--text-dim)", fontSize: "11.5px", lineHeight: "1.4", margin: "4px 0 0 0", maxWidth: "260px" }}>{proj.description}</p>
+                          </div>
                         </div>
                       </td>
 
-                      {/* Details Column */}
-                      <td style={{ padding: "16px" }}>
-                        <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-                          <span style={{ fontWeight: "700", color: "var(--primary)", fontSize: "14px" }}>{proj.title}</span>
-                          <p style={{ color: "var(--text-muted)", fontSize: "12px", lineHeight: "1.5", margin: 0, maxWidth: "450px" }}>{proj.description}</p>
+                      {/* Campus Deployments, Keys, Deadlines & Progress Metrics */}
+                      <td style={{ padding: "16px", verticalAlign: "top" }}>
+                        <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                          {activeAllocations.length > 0 ? (
+                            activeAllocations.map(alloc => {
+                              const isProposed = alloc.status === "Proposed";
+                              // Calculate days left relative to May 26, 2026
+                              const today = new Date("2026-05-26");
+                              const due = new Date(alloc.proposedDueDate);
+                              const diffTime = due.getTime() - today.getTime();
+                              const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                              const isBreached = diffDays < 0;
+
+                              return (
+                                <div key={alloc.targetCampusId} style={{
+                                  display: "grid",
+                                  gridTemplateColumns: "1.5fr 1fr 1.2fr 1fr 1fr",
+                                  alignItems: "center",
+                                  gap: "12px",
+                                  background: "rgba(255, 255, 255, 0.005)",
+                                  border: "1px solid var(--border-glass)",
+                                  borderRadius: "8px",
+                                  padding: "6px 12px"
+                                }}>
+                                  <span style={{ fontWeight: "700", color: "var(--text-main)", fontSize: "12.5px" }}>
+                                    🏫 {alloc.assignedTo}
+                                  </span>
+                                  <span style={{ fontFamily: "var(--mono)", fontSize: "12px", color: isProposed ? "var(--text-dim)" : "var(--primary)", fontWeight: "700" }}>
+                                    {isProposed ? "Awaiting Decision" : (alloc.assignedKey || "Epic Provisioned")}
+                                  </span>
+                                  <span style={{ fontSize: "11.5px", color: "var(--text-muted)", display: "flex", alignItems: "center", gap: "4px" }}>
+                                    ⏰ {alloc.proposedDueDate}
+                                  </span>
+                                  
+                                  {/* Status */}
+                                  <span style={{
+                                    display: "inline-flex",
+                                    justifyContent: "center",
+                                    padding: "2px 6px",
+                                    borderRadius: "4px",
+                                    fontSize: "9.5px",
+                                    fontWeight: "800",
+                                    background: isBreached 
+                                      ? "rgba(239, 68, 68, 0.08)" 
+                                      : (isProposed ? "rgba(251, 146, 60, 0.08)" : "rgba(45, 212, 191, 0.08)"),
+                                    border: isBreached 
+                                      ? "1px solid rgba(239, 68, 68, 0.2)" 
+                                      : (isProposed ? "1px solid rgba(251, 146, 60, 0.2)" : "1px solid rgba(45, 212, 191, 0.2)"),
+                                    color: isBreached 
+                                      ? "#ef4444" 
+                                      : (isProposed ? "var(--accent)" : "#2dd4bf"),
+                                    textTransform: "uppercase"
+                                  }}>
+                                    {isBreached ? "🚨 BREACHED" : (isProposed ? "⏳ PROPOSED" : "⏳ ACTIVE")}
+                                  </span>
+
+                                  {/* Action / Alert */}
+                                  <div style={{ textAlign: "right" }}>
+                                    <button
+                                      onClick={async () => {
+                                        try {
+                                          await axios.post("http://localhost:5000/moderator/alerts/check");
+                                          triggerToast(`Deadline warning notification dispatched successfully to ${alloc.assignedTo} Coordinator!`);
+                                        } catch (err) {
+                                          console.error(err);
+                                        }
+                                      }}
+                                      className="btn-secondary"
+                                      style={{
+                                        padding: "4px 8px",
+                                        fontSize: "10.5px",
+                                        borderRadius: "5px",
+                                        color: isBreached ? "#f87171" : "var(--text-muted)",
+                                        borderColor: isBreached ? "rgba(239, 68, 68, 0.3)" : "var(--border-glass)",
+                                        cursor: "pointer"
+                                      }}
+                                    >
+                                      Alert Spoke ✉️
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })
+                          ) : (
+                            <span style={{ fontSize: "12px", color: "var(--text-dim)", fontStyle: "italic", padding: "4px 0" }}>
+                              No campus space deployments assigned. Click '+ Allocate Spoke' to begin.
+                            </span>
+                          )}
                         </div>
-                      </td>
-
-                      {/* Budget Column */}
-                      <td style={{ padding: "16px", textAlign: "center", fontWeight: "700", color: "var(--primary)", fontFamily: "var(--mono)" }}>
-                        {proj.budget}
-                      </td>
-
-                      {/* Duration Column */}
-                      <td style={{ padding: "16px", textAlign: "center", color: "var(--text-main)", fontWeight: "500" }}>
-                        {proj.duration}
-                      </td>
-
-                      {/* Status Column */}
-                      <td style={{ padding: "16px", textAlign: "center" }}>
-                        <span style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          padding: "4px 10px",
-                          borderRadius: "6px",
-                          fontSize: "11px",
-                          fontWeight: "700",
-                          background: proj.status.includes("BREACHED")
-                            ? "rgba(239, 68, 68, 0.08)"
-                            : proj.status === "Active"
-                            ? "rgba(16, 185, 129, 0.08)"
-                            : proj.status === "Proposed"
-                            ? "rgba(99, 102, 241, 0.08)"
-                            : "rgba(251, 146, 60, 0.08)",
-                          border: proj.status.includes("BREACHED")
-                            ? "1px solid rgba(239, 68, 68, 0.2)"
-                            : proj.status === "Active"
-                            ? "1px solid rgba(16, 185, 129, 0.2)"
-                            : proj.status === "Proposed"
-                            ? "1px solid rgba(99, 102, 241, 0.2)"
-                            : "1px solid rgba(251, 146, 60, 0.2)",
-                          color: proj.status.includes("BREACHED")
-                            ? "#ef4444"
-                            : proj.status === "Active"
-                            ? "#34d399"
-                            : proj.status === "Proposed"
-                            ? "#818cf8"
-                            : "#fb923c",
-                          textTransform: "uppercase"
-                        }}>
-                          {proj.status.includes("BREACHED")
-                            ? "🚨 Breached"
-                            : proj.status === "Active"
-                            ? "✅ Active"
-                            : proj.status === "Proposed"
-                            ? "⏳ Proposed"
-                            : "⏳ Pending Review"}
-                        </span>
                       </td>
 
                       {/* Action Column */}
-                      <td style={{ padding: "16px", textAlign: "center" }}>
-                        {isAssigned ? (
-                          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "2px" }}>
-                            <span style={{ fontSize: "10px", color: "var(--text-muted)", fontWeight: "700", textTransform: "uppercase" }}>{proj.assignedTo}</span>
-                            <span style={{
-                              fontFamily: "var(--mono)",
-                              fontSize: "11px",
-                              fontWeight: "800",
-                              color: proj.assignedKey ? "var(--primary)" : "#818cf8",
-                              background: proj.assignedKey ? "rgba(99, 102, 241, 0.1)" : "rgba(99, 102, 241, 0.05)",
-                              padding: "2px 6px",
-                              borderRadius: "4px"
-                            }}>
-                              {proj.assignedKey || "Awaiting Acceptance"}
-                            </span>
-                          </div>
-                        ) : (
-                          <button
-                            onClick={() => onAssignClick(proj)}
-                            className="btn-primary"
-                            style={{
-                              padding: "6px 12px",
-                              fontSize: "12px",
-                              borderRadius: "8px",
-                              background: "var(--accent)",
-                              borderColor: "transparent",
-                              boxShadow: "0 4px 12px rgba(239, 68, 68, 0.15)"
-                            }}
-                          >
-                            Assign Project
-                          </button>
-                        )}
+                      <td style={{ padding: "16px", verticalAlign: "middle", textAlign: "center" }}>
+                        <button
+                          onClick={() => onAssignClick(proj)}
+                          className="btn-primary"
+                          style={{
+                            padding: "8px 14px",
+                            fontSize: "12px",
+                            borderRadius: "8px",
+                            background: "var(--accent)",
+                            borderColor: "transparent",
+                            boxShadow: "0 4px 12px rgba(239, 68, 68, 0.15)",
+                            cursor: "pointer"
+                          }}
+                        >
+                          + Allocate Spoke
+                        </button>
                       </td>
                     </tr>
                   );
@@ -5716,179 +5737,6 @@ function ModeratorDashboardView({ projects, loading, onRefresh, onAssignClick })
                 </div>
               </div>
             )}
-          </div>
-
-          {/* Active Allocations Matrix */}
-          <div className="glass-panel" style={{ padding: "24px" }}>
-            <h3 style={{ fontSize: "16px", fontWeight: "800", color: "var(--text-main)", marginBottom: "16px" }}>
-              Active Project Allocations Matrix
-            </h3>
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: "13px" }}>
-                <thead>
-                  <tr style={{ borderBottom: "1.5px solid var(--border-glass)" }}>
-                    <th style={{ padding: "12px 16px", color: "var(--text-muted)", fontWeight: "700" }}>Project Details</th>
-                    <th style={{ padding: "12px 16px", color: "var(--text-muted)", fontWeight: "700", textAlign: "left" }}>Campus Deployments, Keys, Deadlines & Progress Metrics</th>
-                    <th style={{ padding: "12px 16px", color: "var(--text-muted)", fontWeight: "700", textAlign: "center" }}>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {projects.filter(p => (p.allocations && p.allocations.length > 0) || p.status === "Proposed" || p.status === "Active" || p.status.includes("BREACHED")).map((proj, idx) => {
-                    const activeAllocations = proj.allocations || [];
-                    return (
-                      <tr
-                        key={proj.id}
-                        style={{
-                          borderBottom: "1px solid var(--border-glass)",
-                          background: idx % 2 === 0 ? "rgba(255,255,255,0.01)" : "transparent"
-                        }}
-                      >
-                        {/* Project Details */}
-                        <td style={{ padding: "16px", verticalAlign: "top" }}>
-                          <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                            {proj.logoUrl && (
-                              <img
-                                src={proj.logoUrl}
-                                alt={proj.company}
-                                style={{ width: "24px", height: "24px", borderRadius: "4px", objectFit: "contain", background: "white", padding: "1px" }}
-                              />
-                            )}
-                            <div>
-                              <div style={{ fontWeight: "750", color: "var(--text-main)", fontSize: "13.5px" }}>{proj.title}</div>
-                              <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>Sponsor: <strong>{proj.company}</strong> | Budget: <strong>{proj.budget}</strong></span>
-                            </div>
-                          </div>
-                        </td>
-
-                        {/* Multi-spoke Institution Allocations */}
-                        <td colSpan={4} style={{ padding: "12px 16px" }}>
-                          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-                            {activeAllocations.length > 0 ? (
-                              activeAllocations.map(alloc => {
-                                const isProposed = alloc.status === "Proposed";
-                                // Calculate days left relative to May 26, 2026
-                                const today = new Date("2026-05-26");
-                                const due = new Date(alloc.proposedDueDate);
-                                const diffTime = due.getTime() - today.getTime();
-                                const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-                                const isBreached = diffDays < 0;
-
-                                return (
-                                  <div key={alloc.targetCampusId} style={{
-                                    display: "grid",
-                                    gridTemplateColumns: "1.5fr 1fr 1.2fr 1fr 1fr",
-                                    alignItems: "center",
-                                    gap: "12px",
-                                    background: "rgba(255, 255, 255, 0.005)",
-                                    border: "1px solid var(--border-glass)",
-                                    borderRadius: "8px",
-                                    padding: "6px 12px"
-                                  }}>
-                                    {/* College space name */}
-                                    <div style={{ fontWeight: "700", color: "var(--text-main)", fontSize: "12px" }}>
-                                      🏫 {alloc.assignedTo}
-                                    </div>
-
-                                    {/* JIRA Epic Key */}
-                                    <div style={{ fontFamily: "var(--mono)", fontSize: "11.5px", color: isProposed ? "var(--text-dim)" : "var(--primary)", fontWeight: "bold" }}>
-                                      {alloc.assignedKey || "Awaiting Decision"}
-                                    </div>
-
-                                    {/* Target deadline */}
-                                    <div style={{ fontSize: "11.5px", color: isBreached ? "#f87171" : "var(--text-muted)", fontWeight: "700" }}>
-                                      ⏰ {alloc.proposedDueDate}
-                                    </div>
-
-                                    {/* Risk/Alloc Status */}
-                                    <div>
-                                      <span style={{
-                                        display: "inline-flex",
-                                        alignItems: "center",
-                                        padding: "2px 6px",
-                                        borderRadius: "4px",
-                                        fontSize: "9.5px",
-                                        fontWeight: "800",
-                                        background: isBreached 
-                                          ? "rgba(239, 68, 68, 0.08)" 
-                                          : (isProposed ? "rgba(251, 146, 60, 0.08)" : "rgba(45, 212, 191, 0.08)"),
-                                        border: isBreached 
-                                          ? "1px solid rgba(239, 68, 68, 0.2)" 
-                                          : (isProposed ? "1px solid rgba(251, 146, 60, 0.2)" : "1px solid rgba(45, 212, 191, 0.2)"),
-                                        color: isBreached 
-                                          ? "#ef4444" 
-                                          : (isProposed ? "var(--accent)" : "#2dd4bf"),
-                                        textTransform: "uppercase"
-                                      }}>
-                                        {isBreached ? "🚨 BREACHED" : (isProposed ? "⏳ PROPOSED" : "⏳ ACTIVE")}
-                                      </span>
-                                    </div>
-
-                                    {/* Actions & Alerts */}
-                                    <div style={{ textAlign: "right" }}>
-                                      <button
-                                        onClick={async () => {
-                                          try {
-                                            await axios.post("http://localhost:5000/moderator/alerts/check");
-                                            alert(`Deadline warning notification dispatched successfully to ${alloc.assignedTo} Coordinator!`);
-                                          } catch (err) {
-                                            console.error(err);
-                                          }
-                                        }}
-                                        className="btn-secondary"
-                                        style={{
-                                          padding: "4px 8px",
-                                          fontSize: "10.5px",
-                                          borderRadius: "5px",
-                                          color: isBreached ? "#f87171" : "var(--text-muted)",
-                                          borderColor: isBreached ? "rgba(239, 68, 68, 0.3)" : "var(--border-glass)",
-                                          cursor: "pointer"
-                                        }}
-                                      >
-                                        Alert Spoke ✉️
-                                      </button>
-                                    </div>
-                                  </div>
-                                );
-                              })
-                            ) : (
-                              <span style={{ fontSize: "12px", color: "var(--text-dim)", fontStyle: "italic", padding: "4px 0" }}>
-                                No campus space deployments assigned. Click '+ Allocate Spoke' to begin.
-                              </span>
-                            )}
-                          </div>
-                        </td>
-
-                        {/* Assign actions column */}
-                        <td style={{ padding: "16px", verticalAlign: "middle", textAlign: "center" }}>
-                          <button
-                            onClick={() => onAssignClick(proj)}
-                            className="btn-primary"
-                            style={{
-                              padding: "6px 12px",
-                              fontSize: "12px",
-                              borderRadius: "8px",
-                              background: "var(--accent)",
-                              borderColor: "transparent",
-                              boxShadow: "0 4px 12px rgba(239, 68, 68, 0.15)",
-                              cursor: "pointer"
-                            }}
-                          >
-                            + Allocate Spoke
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                  {projects.filter(p => (p.allocations && p.allocations.length > 0) || p.status === "Proposed" || p.status === "Active" || p.status.includes("BREACHED")).length === 0 && (
-                    <tr>
-                      <td colSpan={6} style={{ padding: "30px", textAlign: "center", color: "var(--text-dim)" }}>
-                        No active campus allocations found. Go to Ingested Proposals to allocate projects.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
           </div>
         </div>
       )}

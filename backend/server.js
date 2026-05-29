@@ -15,10 +15,10 @@ const auth = Buffer.from(
 
 // ApniLeap Hub & Spoke Configurations
 const SPOKES = {
-  "3": { name: "KLE Spoke", key: "AK", live: true, boardId: 75 },
-  "101": { name: "COEP Spoke", key: "AK", live: true, boardId: 76 },
-  "102": { name: "MMCOEP Spoke", key: "AK", live: true, boardId: 77 },
-  "103": { name: "RIT Spoke", key: "AK", live: true, boardId: 78 },
+  "3": { name: "KLE Spoke", key: "AK", live: true, boardId: 111 },
+  "101": { name: "COEP Spoke", key: "AK", live: true, boardId: 112 },
+  "102": { name: "MMCOEP Spoke", key: "AK", live: true, boardId: 113 },
+  "103": { name: "RIT Spoke", key: "AK", live: true, boardId: 114 },
 };
 
 const LIVE_BOARD_IDS = Object.values(SPOKES).filter(s => s.live).map(s => s.boardId);
@@ -1397,35 +1397,13 @@ let companyProjectsIntake = [
     description: "Build an AI-based system using Jetson Nano for precision agriculture monitoring, soil health inspection, and pest detection on crops.",
     budget: "$25,000",
     duration: "6 Months",
-    status: "Active",
-    assignedTo: "KLE Spoke",
-    targetCampusId: "3",
-    proposedDueDate: "2026-08-25",
-    assignedKey: "AK-12",
+    status: "Proposed",
+    assignedTo: null,
+    targetCampusId: null,
+    proposedDueDate: null,
+    assignedKey: null,
     dateAdded: "2026-05-20",
-    allocations: [
-      {
-        targetCampusId: "3",
-        assignedTo: "KLE Spoke",
-        status: "Active",
-        proposedDueDate: "2026-08-25",
-        assignedKey: "AK-12"
-      },
-      {
-        targetCampusId: "101",
-        assignedTo: "COEP Spoke",
-        status: "Active",
-        proposedDueDate: "2026-09-10",
-        assignedKey: "AK-15"
-      },
-      {
-        targetCampusId: "103",
-        assignedTo: "RIT Spoke",
-        status: "Proposed",
-        proposedDueDate: "2026-07-30",
-        assignedKey: null
-      }
-    ]
+    allocations: []
   },
   {
     id: "proj-2",
@@ -1435,28 +1413,13 @@ let companyProjectsIntake = [
     description: "Design and verify a micro-controller unit (MCU) for dashboard telemetry and advanced sensor fusion in electric vehicles.",
     budget: "$40,000",
     duration: "9 Months",
-    status: "Active",
-    assignedTo: "COEP Spoke",
-    targetCampusId: "101",
-    proposedDueDate: "2026-10-15",
-    assignedKey: "AK-21",
+    status: "Proposed",
+    assignedTo: null,
+    targetCampusId: null,
+    proposedDueDate: null,
+    assignedKey: null,
     dateAdded: "2026-05-24",
-    allocations: [
-      {
-        targetCampusId: "101",
-        assignedTo: "COEP Spoke",
-        status: "Active",
-        proposedDueDate: "2026-10-15",
-        assignedKey: "AK-21"
-      },
-      {
-        targetCampusId: "3",
-        assignedTo: "KLE Spoke",
-        status: "Active",
-        proposedDueDate: "2026-09-05",
-        assignedKey: "AK-22"
-      }
-    ]
+    allocations: []
   },
   {
     id: "proj-3",
@@ -1467,20 +1430,12 @@ let companyProjectsIntake = [
     budget: "$15,000",
     duration: "4 Months",
     status: "Proposed",
-    assignedTo: "MMCOEP Spoke",
-    targetCampusId: "102",
-    proposedDueDate: "2026-07-20",
+    assignedTo: null,
+    targetCampusId: null,
+    proposedDueDate: null,
     assignedKey: null,
     dateAdded: "2026-05-26",
-    allocations: [
-      {
-        targetCampusId: "102",
-        assignedTo: "MMCOEP Spoke",
-        status: "Proposed",
-        proposedDueDate: "2026-07-20",
-        assignedKey: null
-      }
-    ]
+    allocations: []
   }
 ];
 
@@ -1879,6 +1834,8 @@ app.post("/spoke/project/:projectId/decline", (req, res) => {
     status: project.status
   });
 });
+
+
 
 // ==========================================
 // COLLABORATIVE MEETING PORTAL DATA & ROUTES
