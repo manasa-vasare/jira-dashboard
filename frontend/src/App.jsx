@@ -6,6 +6,15 @@ import {
 } from "@hello-pangea/dnd";
 import axios from "axios";
 
+axios.interceptors.request.use((config) => {
+  const token = localStorage.getItem("apnileap-token");
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
+
 // Modern Lucide-style Icon setup using React Icons Fa
 import {
   FaTasks,
@@ -33,6 +42,12 @@ import {
   FaEyeSlash,
   FaUser
 } from "react-icons/fa";
+import {
+  LayoutDashboard, FolderKanban, CheckCircle, Clock, Zap, Crown, Building2,
+  CalendarDays, Settings, PlayCircle, PlusCircle, AlertTriangle, Monitor,
+  Activity, Users, LogOut, Sun, Moon, Briefcase, Calendar, FolderHeart
+} from "lucide-react";
+
 
 import {
   PieChart,
@@ -101,6 +116,14 @@ function App() {
   const [showPassword, setShowPassword] = useState(false);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
 
+  // Forgot Password States
+  const [isForgotPasswordOpen, setIsForgotPasswordOpen] = useState(false);
+  const [forgotPasswordStep, setForgotPasswordStep] = useState(1);
+  const [forgotPasswordEmail, setForgotPasswordEmail] = useState("");
+  const [resetTokenInput, setResetTokenInput] = useState("");
+  const [newPasswordInput, setNewPasswordInput] = useState("");
+  const [isResetting, setIsResetting] = useState(false);
+
   // Navigation & UI States
   const [activeView, setActiveView] = useState("dashboard"); // "dashboard" or "kanban"
   const [theme, setTheme] = useState(() => localStorage.getItem("app-theme") || "dark");
@@ -129,6 +152,7 @@ function App() {
   const [isModeratorLoading, setIsModeratorLoading] = useState(false);
   const [selectedAssignProject, setSelectedAssignProject] = useState(null);
   const [isAssignModalOpen, setIsAssignModalOpen] = useState(false);
+  const [isSignOutConfirmOpen, setIsSignOutConfirmOpen] = useState(false);
   const [assignTargetCampus, setAssignTargetCampus] = useState("3");
   const [assignDueDate, setAssignDueDate] = useState("2026-08-25");
   const [isProvisioning, setIsProvisioning] = useState(false);
@@ -165,6 +189,16 @@ function App() {
   // Core Data States
   const [tasks, setTasks] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [tasksCache, setTasksCache] = useState({});
+
+  const setTasksAndCache = (newTasksOrFn, boardId = currentBoardId) => {
+    setTasks(prev => {
+      const resolved = typeof newTasksOrFn === "function" ? newTasksOrFn(prev) : newTasksOrFn;
+      setTasksCache(cache => ({ ...cache, [boardId]: resolved }));
+      return resolved;
+    });
+  };
+
   const [spokeMembers, setSpokeMembers] = useState([]);
   const [isMembersLoading, setIsMembersLoading] = useState(false);
 
@@ -223,6 +257,9 @@ function App() {
     if (cleanEmail.endsWith("@apnileap.com") || cleanEmail === "admin" || cleanEmail === "moderator") {
       return "moderator";
     }
+    if (cleanEmail.includes("nvidia") || cleanEmail.endsWith("@nvidia.com") || cleanEmail.includes("google") || cleanEmail.endsWith("@google.com") || cleanEmail.includes("intel") || cleanEmail.endsWith("@intel.com")) {
+      return "company";
+    }
     if (cleanEmail.includes("kle") || cleanEmail.endsWith("@kletech.ac.in")) {
       return "spoke-kle";
     }
@@ -238,7 +275,7 @@ function App() {
     return null;
   };
 
-  const handleLoginSubmit = (e) => {
+  const handleLoginSubmit = async (e) => {
     if (e) e.preventDefault();
     setLoginError("");
 
@@ -247,33 +284,94 @@ function App() {
       return;
     }
 
-    const persona = mapEmailToPersona(loginEmail);
-    if (!persona) {
-      setLoginError("Invalid email address. Please use a recognized administrator or campus spoke domain.");
-      return;
-    }
-
-    const displayName = loginEmail.split("@")[0].replace(/[._-]/g, " ").replace(/\b\w/g, c => c.toUpperCase());
-    const matchedUser = {
-      email: loginEmail,
-      displayName: displayName,
-      role: persona === "moderator" ? "Central Moderator" : (SPOKES[persona === "spoke-kle" ? "3" : persona === "spoke-coep" ? "101" : persona === "spoke-mmcoep" ? "102" : "103"]?.name || "Campus") + " Coordinator"
-    };
-
     setIsLoggingIn(true);
-    setTimeout(() => {
+    try {
+      const res = await axios.post("http://localhost:5000/api/auth/login", {
+        email: loginEmail,
+        password: loginPassword,
+      });
+
+      const { token, user } = res.data;
+      
       setIsLoggingIn(false);
       setIsAuthenticated(true);
-      setSessionUser(matchedUser);
+      setSessionUser(user);
+      
+      let persona = "moderator";
+      if (user.role === "COORDINATOR") {
+        if (user.campusId === "3") persona = "spoke-kle";
+        else if (user.campusId === "101") persona = "spoke-coep";
+        else if (user.campusId === "102") persona = "spoke-mmcoep";
+        else if (user.campusId === "103") persona = "spoke-rit";
+      } else if (user.role === "SPONSOR" || user.role === "COMPANY") {
+        persona = "company";
+      } else {
+        persona = mapEmailToPersona(user.email) || "moderator";
+      }
+
       setCurrentPersona(persona);
       setActiveWorkspace(persona === "moderator" ? "hub" : persona);
 
+      localStorage.setItem("apnileap-token", token);
       localStorage.setItem("apnileap-auth", "true");
-      localStorage.setItem("apnileap-user", JSON.stringify(matchedUser));
+      localStorage.setItem("apnileap-user", JSON.stringify(user));
       localStorage.setItem("apnileap-persona", persona);
 
-      triggerToast(`Logged in successfully as ${matchedUser.displayName}!`);
-    }, 700);
+      triggerToast(`Logged in successfully as ${user.name}!`);
+    } catch (err) {
+      setIsLoggingIn(false);
+      setLoginError(err.response?.data?.error || "Login failed. Please check your credentials.");
+    }
+  };
+
+  const handleForgotPasswordSubmit = async (e) => {
+    e.preventDefault();
+    if (!forgotPasswordEmail.trim()) {
+      triggerToast("Please enter your email.", "error");
+      return;
+    }
+    setIsResetting(true);
+    try {
+      const res = await axios.post("http://localhost:5000/api/auth/forgot-password", {
+        email: forgotPasswordEmail
+      });
+      setIsResetting(false);
+      setForgotPasswordStep(2);
+      // Demo Mode: Show the token in an alert!
+      if (res.data.demoToken) {
+        alert(`[SIMULATED EMAIL]\n\nPassword Reset Token: ${res.data.demoToken}\n\nPlease copy this token.`);
+      }
+      triggerToast("Reset token generated! (See alert for demo token)", "success");
+    } catch (err) {
+      setIsResetting(false);
+      triggerToast(err.response?.data?.error || "Failed to initiate reset.", "error");
+    }
+  };
+
+  const handleResetPasswordSubmit = async (e) => {
+    e.preventDefault();
+    if (!resetTokenInput.trim() || !newPasswordInput.trim()) {
+      triggerToast("Please fill all fields.", "error");
+      return;
+    }
+    setIsResetting(true);
+    try {
+      const res = await axios.post("http://localhost:5000/api/auth/reset-password", {
+        email: forgotPasswordEmail,
+        token: resetTokenInput,
+        newPassword: newPasswordInput
+      });
+      setIsResetting(false);
+      setIsForgotPasswordOpen(false);
+      setForgotPasswordStep(1);
+      setForgotPasswordEmail("");
+      setResetTokenInput("");
+      setNewPasswordInput("");
+      triggerToast("Password reset successfully! You can now log in.", "success");
+    } catch (err) {
+      setIsResetting(false);
+      triggerToast(err.response?.data?.error || "Failed to reset password.", "error");
+    }
   };
 
   const handleQuickConnect = (email, name, boardId, persona) => {
@@ -287,7 +385,8 @@ function App() {
       const matchedUser = {
         email: email,
         displayName: name,
-        role: persona === "moderator" ? "Central Moderator" : (SPOKES[boardId]?.name || "Campus") + " Coordinator"
+        role: persona === "moderator" ? "Central Moderator" : persona === "company" ? "Corporate Sponsor" : (SPOKES[boardId]?.name || "Campus") + " Coordinator",
+        company: persona === "company" ? "NVIDIA" : null
       };
 
       setIsAuthenticated(true);
@@ -299,7 +398,7 @@ function App() {
       localStorage.setItem("apnileap-user", JSON.stringify(matchedUser));
       localStorage.setItem("apnileap-persona", persona);
 
-      triggerToast(`Quick Connected as ${matchedUser.displayName}! ⚡`);
+      triggerToast(`Quick Connected as ${matchedUser.displayName}! `);
     }, 800);
   };
 
@@ -314,12 +413,18 @@ function App() {
     localStorage.removeItem("apnileap-auth");
     localStorage.removeItem("apnileap-user");
     localStorage.removeItem("apnileap-persona");
+    setTasksCache({});
+    setTasks([]);
     
     triggerToast("Logged out successfully.");
   };
 
-  const fetchSpokeMembers = async (boardId) => {
-    setIsMembersLoading(true);
+  const handleSignOutWithConfirmation = () => {
+    setIsSignOutConfirmOpen(true);
+  };
+
+  const fetchSpokeMembers = async (boardId, silent = false) => {
+    if (!silent) setIsMembersLoading(true);
     try {
       const res = await axios.get(`http://localhost:5000/spokes/${boardId}/members`);
       setSpokeMembers(res.data);
@@ -400,7 +505,7 @@ function App() {
             } : null
           }
         }));
-        setTasks(normalized);
+        setTasksAndCache(normalized, boardIdToFetch);
         setConnectionStatus(currentBoardId === "3" ? "Connected to Jira Cloud" : `Connected to Spoke (${currentBoardId})`);
         if (!silent) {
           triggerToast("Successfully synchronized with Live Jira API!");
@@ -492,7 +597,7 @@ function App() {
       if (response.data && response.data.success) {
         triggerToast(`Success! Proposal sent to ${response.data.assignedTo}. Awaiting coordinator review.`);
         setIsAssignModalOpen(false);
-        fetchModeratorProjects(false);
+        fetchModeratorProjects(true);
       }
     } catch (error) {
       console.error("Assignment Error:", error);
@@ -508,9 +613,9 @@ function App() {
     try {
       const res = await axios.post(`http://localhost:5000/spoke/project/${projectId}/accept`, { targetBoardId: currentBoardId });
       if (res.data && res.data.success) {
-        triggerToast("🎉 Project accepted! Jira workspace successfully provisioned with 3 standard Phase tasks!");
-        fetchModeratorProjects(false);
-        fetchJiraTasks(false); // Refresh Jira board immediately
+        triggerToast("Project accepted! Jira workspace successfully provisioned with 3 standard Phase tasks!");
+        fetchModeratorProjects(true);
+        fetchJiraTasks(true); // Refresh Jira board immediately
       }
     } catch (err) {
       console.error("Acceptance Error:", err);
@@ -527,7 +632,7 @@ function App() {
       const res = await axios.post(`http://localhost:5000/spoke/project/${projectId}/decline`, { targetBoardId: currentBoardId });
       if (res.data && res.data.success) {
         triggerToast("Proposal declined. Project returned to the Moderator assignment pool.");
-        fetchModeratorProjects(false);
+        fetchModeratorProjects(true);
       }
     } catch (err) {
       console.error("Decline Error:", err);
@@ -537,18 +642,42 @@ function App() {
     }
   };
 
+  const handleAssignFacultyToProject = async (projectId, facultyName) => {
+    try {
+      const res = await axios.post(`http://localhost:5000/spoke/project/${projectId}/assign`, {
+        targetBoardId: currentBoardId,
+        facultyName
+      });
+      if (res.data && res.data.success) {
+        triggerToast("Faculty successfully assigned to project.", "success");
+        fetchModeratorProjects(true);
+      }
+    } catch (err) {
+      console.error("Assign Faculty Error:", err);
+      triggerToast(err.response?.data?.error || "Failed to assign faculty.", "error");
+    }
+  };
+
   // Re-fetch issues or hub metrics whenever activeWorkspace or currentBoardId changes
   useEffect(() => {
     fetchMeetings(true); // Fetch meetings silently to check for banner alerts
     if (activeWorkspace === "hub") {
-      fetchHubMetrics(false);
+      fetchHubMetrics(hubMetrics !== null);
     } else if (activeWorkspace === "moderator") {
-      fetchModeratorProjects(false);
+      fetchModeratorProjects(moderatorProjects.length > 0);
+    } else if (activeWorkspace === "company") {
+      fetchModeratorProjects(moderatorProjects.length > 0);
     } else if (activeWorkspace === "meetings") {
-      fetchMeetings(false);
+      fetchMeetings(meetings.length > 0);
     } else {
-      fetchJiraTasks(false);
-      fetchSpokeMembers(currentBoardId);
+      const cached = tasksCache[currentBoardId];
+      if (cached !== undefined) {
+        setTasks(cached);
+        fetchJiraTasks(true); // silent background fetch
+      } else {
+        fetchJiraTasks(false); // blocking first-load shimmer
+      }
+      fetchSpokeMembers(currentBoardId, true); // silent non-blocking fetch
       fetchModeratorProjects(true); // Fetch moderator projects silently to check for proposed B2B assignments
     }
   }, [activeWorkspace, currentBoardId]);
@@ -574,11 +703,13 @@ function App() {
         fetchHubMetrics(true);
       } else if (activeWorkspace === "moderator") {
         fetchModeratorProjects(true);
+      } else if (activeWorkspace === "company") {
+        fetchModeratorProjects(true);
       } else if (activeWorkspace === "meetings") {
         fetchMeetings(true);
       } else {
         fetchJiraTasks(true);
-        fetchSpokeMembers(currentBoardId);
+        fetchSpokeMembers(currentBoardId, true);
       }
     }, 10000); // 10s auto-polling
 
@@ -813,7 +944,7 @@ function App() {
     const taskKey = task.key;
     
     // 1. Optimistic update in state
-    setTasks(prevTasks => {
+    setTasksAndCache(prevTasks => {
       return prevTasks.map(t => {
         if (t.id === draggableId) {
           return {
@@ -865,7 +996,9 @@ function App() {
       boardId: currentBoardId
     };
 
-    setIsLoading(true);
+    // Close modal instantly and notify user
+    setIsCreateOpen(false);
+    triggerToast("Creating task in Jira...", "info");
     try {
       const res = await axios.post("http://localhost:5000/tasks", payload);
       triggerToast(`Created task ${res.data.key} in Jira successfully!`);
@@ -879,22 +1012,19 @@ function App() {
       setNewPriority("Medium");
       setNewStatus("Backlog");
       setNewDueDate("");
-      setIsCreateOpen(false);
       
       // Silent fetch from Jira to update board
       await fetchJiraTasks(true);
     } catch (err) {
       console.error("Create issue error:", err);
       triggerToast("Failed to create issue in Jira.", "error");
-    } finally {
-      setIsLoading(false);
     }
   };
 
   // Update Task fields inside Modal with live PUT to Jira
   const handleUpdateTaskDetail = async (updatedTask, changedField) => {
     // Optimistic update
-    setTasks(prev => prev.map(t => t.id === updatedTask.id ? updatedTask : t));
+    setTasksAndCache(prev => prev.map(t => t.id === updatedTask.id ? updatedTask : t));
     setSelectedTask(updatedTask);
 
     try {
@@ -927,7 +1057,7 @@ function App() {
     const nextFlagged = !task.fields.flagged;
     
     // 1. Optimistic update
-    setTasks(prev => prev.map(t => {
+    setTasksAndCache(prev => prev.map(t => {
       if (t.id === task.id) {
         return {
           ...t,
@@ -969,7 +1099,6 @@ function App() {
       return;
     }
     
-    setIsLoading(true);
     try {
       triggerToast(`Logging ${timeSpentString} spent time to issue ${taskKey} in Jira...`);
       await axios.post(`http://localhost:5000/tasks/${taskKey}/worklog`, { timeSpent: timeSpentString, comment: logComment });
@@ -992,8 +1121,6 @@ function App() {
     } catch (err) {
       console.error(err);
       triggerToast("Failed to log work in Jira.", "error");
-    } finally {
-      setIsLoading(false);
     }
   };
 
@@ -1017,7 +1144,6 @@ function App() {
       return;
     }
     
-    setIsLoading(true);
     try {
       const isEpic = parentIssueType && parentIssueType.toLowerCase() === "epic";
       const label = isEpic ? "child task" : "child subtask";
@@ -1046,8 +1172,6 @@ function App() {
     } catch (err) {
       console.error(err);
       triggerToast("Failed to create child task in Jira.", "error");
-    } finally {
-      setIsLoading(false);
     }
   };
 
@@ -1058,7 +1182,6 @@ function App() {
       return;
     }
     
-    setIsLoading(true);
     try {
       triggerToast(`Linking issue ${sourceKey} to ${targetKey} in Jira...`);
       await axios.post(`http://localhost:5000/tasks/links`, { linkType: relationType, sourceKey, targetKey });
@@ -1076,8 +1199,6 @@ function App() {
     } catch (err) {
       console.error(err);
       triggerToast("Failed to link issues in Jira.", "error");
-    } finally {
-      setIsLoading(false);
     }
   };
 
@@ -1085,7 +1206,7 @@ function App() {
   const handleUpdateLabels = async (taskKey, newLabelsArray) => {
     try {
       // 1. Optimistic update
-      setTasks(prev => prev.map(t => {
+      setTasksAndCache(prev => prev.map(t => {
         if (t.key === taskKey) {
           return { ...t, fields: { ...t.fields, labels: newLabelsArray } };
         }
@@ -1110,12 +1231,13 @@ function App() {
 
   // Delete Task Action from Jira
   const handleDeleteTask = async (taskId, taskKey) => {
-    setIsLoading(true);
+    // 1. Optimistic update
+    setTasksAndCache(prev => prev.filter(t => t.key !== taskKey));
+    setSelectedTask(null);
     try {
       triggerToast(`Deleting issue ${taskKey} from Jira...`, "warning");
       await axios.delete(`http://localhost:5000/tasks/${taskKey}`);
       triggerToast(`Permanently deleted issue ${taskKey} from Jira!`, "warning");
-      setSelectedTask(null);
       await fetchJiraTasks(true);
     } catch (err) {
       console.error("Delete Task API Error:", err);
@@ -1123,10 +1245,9 @@ function App() {
       if (jiraErr) {
         triggerToast(`Jira Error: ${jiraErr}`, "error");
       } else {
-        triggerToast(`Failed to delete issue ${taskKey} in Jira.`, "error");
+        triggerToast(`Failed to delete issue ${taskKey} in Jira. Reverting...`, "error");
       }
-    } finally {
-      setIsLoading(false);
+      await fetchJiraTasks(true);
     }
   };
 
@@ -1201,9 +1322,10 @@ function App() {
   });
 
   if (!isAuthenticated) {
-    const recognizedPersona = mapEmailToPersona(loginEmail);
+
 
     return (
+      <>
       <div style={{
         display: "flex",
         minHeight: "100vh",
@@ -1242,20 +1364,20 @@ function App() {
         {/* Global theme selection toggle overlay */}
         <div style={{
           position: "absolute",
-          top: "24px",
-          right: "24px",
+          top: "36px",
+          right: "36px",
           display: "flex",
           alignItems: "center",
           background: "var(--bg-card)",
           border: "1px solid var(--border-glass)",
-          padding: "4px",
+          padding: "6px",
           borderRadius: "99px",
           boxShadow: "var(--shadow-premium)",
           zIndex: 100
         }}>
           {[
-            { name: "dark", label: "Dark", icon: <FaMoon size={12} /> },
-            { name: "light", label: "Light", icon: <FaSun size={12} /> }
+            { name: "dark", label: "Dark", icon: <FaMoon size={18} /> },
+            { name: "light", label: "Light", icon: <FaSun size={18} /> }
           ].map(t => (
             <button
               key={t.name}
@@ -1264,15 +1386,15 @@ function App() {
               style={{
                 display: "flex",
                 alignItems: "center",
-                gap: "6px",
-                padding: "6px 14px",
+                gap: "8px",
+                padding: "10px 22px",
                 borderRadius: "99px",
                 background: theme === t.name ? "linear-gradient(135deg, var(--primary), var(--secondary))" : "transparent",
                 color: theme === t.name ? "var(--text-primary-btn)" : "var(--text-muted)",
                 border: "none",
                 cursor: "pointer",
-                fontWeight: "700",
-                fontSize: "11px",
+                fontWeight: "800",
+                fontSize: "15px",
                 transition: "var(--transition-smooth)"
               }}
             >
@@ -1309,24 +1431,23 @@ function App() {
             <div className="login-sphere sphere-2" style={{ bottom: "-80px", right: "-40px" }} />
             <div className="login-sphere sphere-3" style={{ top: "35%", left: "30%" }} />
             
-            {/* Branding Orb Logo */}
-            <div style={{ position: "relative", zIndex: 10, display: "flex", alignItems: "center", gap: "10px" }}>
+            <div style={{ position: "relative", zIndex: 10, display: "flex", alignItems: "center", gap: "18px" }}>
               <div style={{
                 background: "white",
-                width: "38px",
-                height: "38px",
-                borderRadius: "10px",
+                width: "60px",
+                height: "60px",
+                borderRadius: "14px",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
                 fontWeight: "900",
                 color: "#0d9488",
-                fontSize: "18px",
+                fontSize: "28px",
                 boxShadow: "0 4px 15px rgba(0, 0, 0, 0.15)"
               }}>
                 AL
               </div>
-              <span style={{ fontSize: "22px", fontWeight: "900", letterSpacing: "-0.5px", color: "white" }}>
+              <span style={{ fontSize: "42px", fontWeight: "900", letterSpacing: "-0.5px", color: "white" }}>
                 ApniLeap <span style={{ opacity: 0.85, fontWeight: "400" }}>Hub</span>
               </span>
             </div>
@@ -1334,145 +1455,166 @@ function App() {
             {/* Core welcome text matching reference picture layout */}
             <div style={{ position: "relative", zIndex: 10, margin: "auto 0" }}>
               <h1 style={{
-                fontSize: "44px",
+                fontSize: "72px",
                 fontWeight: "900",
                 color: "white",
                 lineHeight: "1.1",
-                letterSpacing: "-1px",
-                margin: "0 0 10px 0"
+                letterSpacing: "-1.5px",
+                margin: "0 0 16px 0"
               }}>
                 WELCOME
               </h1>
               <h2 style={{
-                fontSize: "18px",
+                fontSize: "30px",
                 fontWeight: "700",
                 color: "rgba(255, 255, 255, 0.9)",
                 textTransform: "uppercase",
-                letterSpacing: "2px",
-                marginBottom: "20px"
+                letterSpacing: "3px",
+                marginBottom: "32px"
               }}>
                 Campus Governance Portal
               </h2>
               <p style={{
-                fontSize: "13.5px",
+                fontSize: "21px",
                 color: "rgba(255, 255, 255, 0.8)",
-                lineHeight: "1.6",
+                lineHeight: "1.65",
                 fontWeight: "400",
-                maxWidth: "340px",
-                margin: "0 0 30px 0"
+                maxWidth: "640px",
+                margin: "0 0 45px 0"
               }}>
                 A robust multi-tenant Agile collaboration suite powered by live Jira Cloud. Experience absolute campus workspace isolation with central Moderator ingestion pathways.
               </p>
 
               {/* Quick Connect demo panel inside left visual panel */}
-              <div style={{ borderTop: "1px solid rgba(255, 255, 255, 0.15)", paddingTop: "20px", maxWidth: "420px" }}>
+              <div style={{ borderTop: "1px solid rgba(255, 255, 255, 0.15)", paddingTop: "35px", maxWidth: "640px" }}>
                 <span style={{
                   display: "block",
-                  fontSize: "11px",
+                  fontSize: "18px",
                   fontWeight: "900",
                   color: "rgba(255, 255, 255, 0.7)",
                   textTransform: "uppercase",
-                  letterSpacing: "1.2px",
-                  marginBottom: "12px"
+                  letterSpacing: "1.8px",
+                  marginBottom: "20px"
                 }}>
-                  ⚡ Quick Demo Connect
+                  Quick Demo Connect
                 </span>
                 
                 <div style={{
                   display: "grid",
                   gridTemplateColumns: "repeat(2, 1fr)",
-                  gap: "8px"
+                  gap: "16px"
                 }}>
                   <button
                     type="button"
                     onClick={() => handleQuickConnect("admin@apnileap.com", "Central Admin", "hub", "moderator")}
                     style={{
                       gridColumn: "span 2",
-                      padding: "10px",
-                      borderRadius: "8px",
+                      padding: "18px",
+                      borderRadius: "12px",
                       background: "rgba(255, 255, 255, 0.12)",
                       border: "1px solid rgba(255, 255, 255, 0.2)",
                       color: "white",
                       fontWeight: "700",
-                      fontSize: "12px",
+                      fontSize: "19px",
                       cursor: "pointer",
                       transition: "var(--transition-smooth)"
                     }}
                     title="Connect as Central Moderator Admin"
                   >
-                    👑 Central Moderator Admin
+                    Central Moderator Admin
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleQuickConnect("sponsor@nvidia.com", "NVIDIA Sponsor", "company", "company")}
+                    style={{
+                      gridColumn: "span 2",
+                      padding: "18px",
+                      borderRadius: "12px",
+                      background: "rgba(255, 255, 255, 0.12)",
+                      border: "1px solid rgba(255, 255, 255, 0.2)",
+                      color: "white",
+                      fontWeight: "700",
+                      fontSize: "19px",
+                      cursor: "pointer",
+                      transition: "var(--transition-smooth)",
+                      marginTop: "-4px"
+                    }}
+                    title="Connect as NVIDIA Corporate Sponsor"
+                  >
+                    NVIDIA Corporate Sponsor
                   </button>
 
                   <button
                     type="button"
                     onClick={() => handleQuickConnect("coordinator@kle.edu", "KLE Coordinator", "3", "spoke-kle")}
                     style={{
-                      padding: "9px",
-                      borderRadius: "8px",
+                      padding: "16px",
+                      borderRadius: "12px",
                       background: "rgba(255, 255, 255, 0.08)",
                       border: "1px solid rgba(255, 255, 255, 0.15)",
                       color: "white",
                       fontWeight: "600",
-                      fontSize: "11.5px",
+                      fontSize: "17px",
                       cursor: "pointer",
                       transition: "var(--transition-smooth)"
                     }}
                   >
-                    🏢 KLE Spoke (Live)
+                    KLE Spoke (Live)
                   </button>
 
                   <button
                     type="button"
                     onClick={() => handleQuickConnect("coordinator@coep.edu", "COEP Coordinator", "101", "spoke-coep")}
                     style={{
-                      padding: "9px",
-                      borderRadius: "8px",
+                      padding: "16px",
+                      borderRadius: "12px",
                       background: "rgba(255, 255, 255, 0.08)",
                       border: "1px solid rgba(255, 255, 255, 0.15)",
                       color: "white",
                       fontWeight: "600",
-                      fontSize: "11.5px",
+                      fontSize: "17px",
                       cursor: "pointer",
                       transition: "var(--transition-smooth)"
                     }}
                   >
-                    🏢 COEP Spoke
+                    COEP Spoke
                   </button>
 
                   <button
                     type="button"
                     onClick={() => handleQuickConnect("coordinator@mmcoep.edu", "MMCOEP Coordinator", "102", "spoke-mmcoep")}
                     style={{
-                      padding: "9px",
-                      borderRadius: "8px",
+                      padding: "16px",
+                      borderRadius: "12px",
                       background: "rgba(255, 255, 255, 0.08)",
                       border: "1px solid rgba(255, 255, 255, 0.15)",
                       color: "white",
                       fontWeight: "600",
-                      fontSize: "11.5px",
+                      fontSize: "17px",
                       cursor: "pointer",
                       transition: "var(--transition-smooth)"
                     }}
                   >
-                    🏢 MMCOEP Spoke
+                    MMCOEP Spoke
                   </button>
 
                   <button
                     type="button"
                     onClick={() => handleQuickConnect("coordinator@rit.edu", "RIT Coordinator", "103", "spoke-rit")}
                     style={{
-                      padding: "9px",
-                      borderRadius: "8px",
+                      padding: "16px",
+                      borderRadius: "12px",
                       background: "rgba(255, 255, 255, 0.08)",
                       border: "1px solid rgba(255, 255, 255, 0.15)",
                       color: "white",
                       fontWeight: "600",
-                      fontSize: "11.5px",
+                      fontSize: "17px",
                       cursor: "pointer",
                       transition: "var(--transition-smooth)"
                     }}
                   >
-                    🏢 RIT Spoke
+                    RIT Spoke
                   </button>
                 </div>
               </div>
@@ -1480,7 +1622,7 @@ function App() {
 
             {/* Footer trademark or copyright */}
             <div style={{ position: "relative", zIndex: 10 }}>
-              <span style={{ fontSize: "11px", color: "rgba(255, 255, 255, 0.6)", fontWeight: "500" }}>
+              <span style={{ fontSize: "16px", color: "rgba(255, 255, 255, 0.6)", fontWeight: "500" }}>
                 Powered by Jira Cloud API Integration
               </span>
             </div>
@@ -1488,8 +1630,8 @@ function App() {
 
           {/* Right panel: Modern Sign In form with icons and show password */}
           <div style={{
-            flex: "1 1 40%",
-            maxWidth: "40%",
+            flex: "1 1 45%",
+            maxWidth: "45%",
             padding: "60px 80px",
             display: "flex",
             flexDirection: "column",
@@ -1498,31 +1640,31 @@ function App() {
             position: "relative",
             minHeight: "100vh"
           }}>
-            <div style={{ maxWidth: "450px", width: "100%", margin: "0 auto" }}>
-              <div style={{ marginBottom: "28px" }}>
-                <h3 style={{ fontSize: "28px", fontWeight: "800", color: "var(--text-main)", marginBottom: "6px", letterSpacing: "-0.5px" }}>
+            <div style={{ maxWidth: "540px", width: "100%", margin: "0 auto" }}>
+              <div style={{ marginBottom: "38px" }}>
+                <h3 style={{ fontSize: "46px", fontWeight: "800", color: "var(--text-main)", marginBottom: "12px", letterSpacing: "-0.5px" }}>
                   Sign In
                 </h3>
-                <p style={{ fontSize: "13px", color: "var(--text-muted)" }}>
+                <p style={{ fontSize: "20px", color: "var(--text-muted)" }}>
                   Enter your campus spoke or administrative email to connect.
                 </p>
               </div>
 
-            <form onSubmit={handleLoginSubmit} style={{ display: "flex", flexDirection: "column", gap: "18px" }}>
+            <form onSubmit={handleLoginSubmit} style={{ display: "flex", flexDirection: "column", gap: "28px" }}>
               {loginError && (
                 <div style={{
-                  padding: "11px 14px",
-                  borderRadius: "10px",
+                  padding: "18px 22px",
+                  borderRadius: "14px",
                   background: "rgba(239, 68, 68, 0.1)",
                   border: "1px solid rgba(239, 68, 68, 0.2)",
                   color: "#ef4444",
-                  fontSize: "12.5px",
+                  fontSize: "18px",
                   fontWeight: "600",
                   display: "flex",
                   alignItems: "center",
-                  gap: "8px"
+                  gap: "12px"
                 }}>
-                  ⚠️ {loginError}
+                  ️ {loginError}
                 </div>
               )}
 
@@ -1530,10 +1672,10 @@ function App() {
               <div>
                 <label style={{
                   display: "block",
-                  fontSize: "11px",
+                  fontSize: "17px",
                   fontWeight: "800",
                   color: "var(--text-muted)",
-                  marginBottom: "6px",
+                  marginBottom: "12px",
                   textTransform: "uppercase",
                   letterSpacing: "0.8px"
                 }}>
@@ -1542,11 +1684,11 @@ function App() {
                 <div style={{ position: "relative" }}>
                   <FaEnvelope style={{
                     position: "absolute",
-                    left: "14px",
+                    left: "20px",
                     top: "50%",
                     transform: "translateY(-50%)",
                     color: "var(--text-dim)",
-                    fontSize: "14px"
+                    fontSize: "21px"
                   }} />
                   <input
                     type="text"
@@ -1555,47 +1697,27 @@ function App() {
                     onChange={(e) => setLoginEmail(e.target.value)}
                     style={{
                       width: "100%",
-                      padding: "12px 14px 12px 42px",
-                      borderRadius: "10px",
+                      padding: "18px 20px 18px 56px",
+                      borderRadius: "14px",
                       background: "var(--bg-input)",
                       border: "1px solid var(--border-glass)",
                       color: "var(--text-main)",
                       outline: "none",
-                      fontSize: "14px",
+                      fontSize: "20px",
                       transition: "var(--transition-smooth)"
                     }}
                   />
                 </div>
-                
-                {/* Dynamic Persona Indicator badge */}
-                {recognizedPersona && (
-                  <div style={{
-                    marginTop: "8px",
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: "6px",
-                    padding: "4px 10px",
-                    borderRadius: "6px",
-                    background: recognizedPersona === "moderator" ? "rgba(251, 146, 60, 0.12)" : "rgba(45, 212, 191, 0.12)",
-                    border: recognizedPersona === "moderator" ? "1px solid rgba(251, 146, 60, 0.2)" : "1px solid rgba(45, 212, 191, 0.2)",
-                    color: recognizedPersona === "moderator" ? "var(--accent)" : "var(--primary)",
-                    fontSize: "11.5px",
-                    fontWeight: "700",
-                    animation: "slideIn 0.2s ease-out"
-                  }}>
-                    {recognizedPersona === "moderator" ? "👑 Central Moderator (Admin)" : `🏢 ${recognizedPersona.replace("spoke-", "").toUpperCase()} Spoke Coordinator`}
-                  </div>
-                )}
               </div>
 
               {/* Password Input Field */}
               <div>
                 <label style={{
                   display: "block",
-                  fontSize: "11px",
+                  fontSize: "17px",
                   fontWeight: "800",
                   color: "var(--text-muted)",
-                  marginBottom: "6px",
+                  marginBottom: "12px",
                   textTransform: "uppercase",
                   letterSpacing: "0.8px"
                 }}>
@@ -1604,11 +1726,11 @@ function App() {
                 <div style={{ position: "relative" }}>
                   <FaLock style={{
                     position: "absolute",
-                    left: "14px",
+                    left: "20px",
                     top: "50%",
                     transform: "translateY(-50%)",
                     color: "var(--text-dim)",
-                    fontSize: "14px"
+                    fontSize: "21px"
                   }} />
                   <input
                     type={showPassword ? "text" : "password"}
@@ -1617,13 +1739,13 @@ function App() {
                     onChange={(e) => setLoginPassword(e.target.value)}
                     style={{
                       width: "100%",
-                      padding: "12px 65px 12px 42px",
-                      borderRadius: "10px",
+                      padding: "18px 90px 18px 56px",
+                      borderRadius: "14px",
                       background: "var(--bg-input)",
                       border: "1px solid var(--border-glass)",
                       color: "var(--text-main)",
                       outline: "none",
-                      fontSize: "14px",
+                      fontSize: "20px",
                       transition: "var(--transition-smooth)"
                     }}
                   />
@@ -1633,13 +1755,13 @@ function App() {
                     onClick={() => setShowPassword(!showPassword)}
                     style={{
                       position: "absolute",
-                      right: "12px",
+                      right: "22px",
                       top: "50%",
                       transform: "translateY(-50%)",
                       background: "none",
                       border: "none",
                       color: "var(--text-muted)",
-                      fontSize: "11px",
+                      fontSize: "15px",
                       fontWeight: "800",
                       cursor: "pointer",
                       textTransform: "uppercase",
@@ -1654,12 +1776,17 @@ function App() {
               </div>
 
               {/* Remember me & Forgot Password */}
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "12.5px", color: "var(--text-muted)", marginTop: "2px" }}>
-                <label style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer" }}>
-                  <input type="checkbox" style={{ accentColor: "var(--primary)" }} />
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "18px", color: "var(--text-muted)", marginTop: "4px" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: "10px", cursor: "pointer" }}>
+                  <input type="checkbox" style={{ accentColor: "var(--primary)", width: "18px", height: "18px" }} />
                   <span>Remember me</span>
                 </label>
-                <a href="#forgot" onClick={(e) => { e.preventDefault(); triggerToast("Password recovery is handled by your local campus AD server.", "info"); }} style={{ color: "var(--primary)", textDecoration: "none", fontWeight: "600" }}>
+                <a href="#forgot" onClick={(e) => { 
+                  e.preventDefault(); 
+                  setIsForgotPasswordOpen(true); 
+                  setForgotPasswordStep(1);
+                  setForgotPasswordEmail(loginEmail);
+                }} style={{ color: "var(--primary)", textDecoration: "none", fontWeight: "600" }}>
                   Forgot Password?
                 </a>
               </div>
@@ -1669,33 +1796,33 @@ function App() {
                 type="submit"
                 disabled={isLoggingIn}
                 style={{
-                  marginTop: "10px",
-                  padding: "13px 20px",
-                  borderRadius: "10px",
+                  marginTop: "16px",
+                  padding: "18px 30px",
+                  borderRadius: "14px",
                   background: "linear-gradient(135deg, var(--primary), var(--secondary))",
                   color: "var(--text-primary-btn)",
                   border: "none",
                   fontWeight: "800",
-                  fontSize: "14.5px",
+                  fontSize: "22px",
                   cursor: isLoggingIn ? "not-allowed" : "pointer",
                   boxShadow: "0 6px 15px var(--primary-glow)",
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
-                  gap: "8px",
+                  gap: "12px",
                   opacity: isLoggingIn ? 0.8 : 1,
                   transition: "var(--transition-smooth)"
                 }}
               >
                 {isLoggingIn ? (
                   <>
-                    <FaSyncAlt className="pulse-glow" style={{ animation: "pulseGlow 1.5s infinite linear" }} />
+                    <FaSyncAlt className="pulse-glow" style={{ animation: "pulseGlow 1.5s infinite linear", fontSize: "22px" }} />
                     <span>Connecting to Live Jira Hub...</span>
                   </>
                 ) : (
                   <>
                     <span>Sign In</span>
-                    <span>🚀</span>
+                    <span></span>
                   </>
                 )}
               </button>
@@ -1704,6 +1831,115 @@ function App() {
           </div>
         </div>
       </div>
+
+      {/* Forgot Password Modal */}
+      {isForgotPasswordOpen && (
+        <div style={{
+          position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
+          background: "rgba(0,0,0,0.5)", backdropFilter: "blur(4px)",
+          display: "flex", alignItems: "center", justifyContent: "center",
+          zIndex: 1000
+        }}>
+          <div style={{
+            background: "var(--bg-panel)",
+            padding: "30px",
+            borderRadius: "16px",
+            width: "400px",
+            boxShadow: "0 10px 40px rgba(0,0,0,0.3)",
+            border: "1px solid var(--border-color)",
+            position: "relative"
+          }}>
+            <button 
+              onClick={() => setIsForgotPasswordOpen(false)}
+              style={{
+                position: "absolute", top: "15px", right: "15px",
+                background: "transparent", border: "none",
+                color: "var(--text-muted)", cursor: "pointer", fontSize: "18px"
+              }}
+            >
+              <FaTimes />
+            </button>
+            <h3 style={{ marginTop: 0, marginBottom: "20px", color: "var(--text-primary)" }}>
+              {forgotPasswordStep === 1 ? "Reset Password" : "Enter Token"}
+            </h3>
+            
+            {forgotPasswordStep === 1 ? (
+              <form onSubmit={handleForgotPasswordSubmit}>
+                <div style={{ marginBottom: "15px" }}>
+                  <label style={{ display: "block", marginBottom: "8px", color: "var(--text-secondary)", fontSize: "13px" }}>Email Address</label>
+                  <input
+                    type="email"
+                    value={forgotPasswordEmail}
+                    onChange={(e) => setForgotPasswordEmail(e.target.value)}
+                    style={{
+                      width: "100%", padding: "10px", borderRadius: "8px",
+                      background: "var(--bg-main)", border: "1px solid var(--border-color)",
+                      color: "var(--text-primary)", boxSizing: "border-box"
+                    }}
+                    required
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={isResetting}
+                  style={{
+                    width: "100%", padding: "12px", borderRadius: "8px",
+                    background: "var(--primary)", color: "white",
+                    border: "none", fontWeight: "bold", cursor: isResetting ? "not-allowed" : "pointer",
+                    opacity: isResetting ? 0.7 : 1
+                  }}
+                >
+                  {isResetting ? "Generating Token..." : "Send Reset Token"}
+                </button>
+              </form>
+            ) : (
+              <form onSubmit={handleResetPasswordSubmit}>
+                <div style={{ marginBottom: "15px" }}>
+                  <label style={{ display: "block", marginBottom: "8px", color: "var(--text-secondary)", fontSize: "13px" }}>Reset Token</label>
+                  <input
+                    type="text"
+                    value={resetTokenInput}
+                    onChange={(e) => setResetTokenInput(e.target.value)}
+                    style={{
+                      width: "100%", padding: "10px", borderRadius: "8px",
+                      background: "var(--bg-main)", border: "1px solid var(--border-color)",
+                      color: "var(--text-primary)", boxSizing: "border-box"
+                    }}
+                    required
+                  />
+                </div>
+                <div style={{ marginBottom: "20px" }}>
+                  <label style={{ display: "block", marginBottom: "8px", color: "var(--text-secondary)", fontSize: "13px" }}>New Password</label>
+                  <input
+                    type="password"
+                    value={newPasswordInput}
+                    onChange={(e) => setNewPasswordInput(e.target.value)}
+                    style={{
+                      width: "100%", padding: "10px", borderRadius: "8px",
+                      background: "var(--bg-main)", border: "1px solid var(--border-color)",
+                      color: "var(--text-primary)", boxSizing: "border-box"
+                    }}
+                    required
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={isResetting}
+                  style={{
+                    width: "100%", padding: "12px", borderRadius: "8px",
+                    background: "var(--primary)", color: "white",
+                    border: "none", fontWeight: "bold", cursor: isResetting ? "not-allowed" : "pointer",
+                    opacity: isResetting ? 0.7 : 1
+                  }}
+                >
+                  {isResetting ? "Resetting..." : "Reset Password"}
+                </button>
+              </form>
+            )}
+          </div>
+        </div>
+      )}
+      </>
     );
   }
 
@@ -1822,14 +2058,19 @@ function App() {
                 letterSpacing: "0.8px",
                 marginBottom: "8px"
               }}>
-                👤 Active Profile Role
+                Active Profile Role
               </label>
               <select
                 value={currentPersona}
                 onChange={(e) => {
                   const newPersona = e.target.value;
                   setCurrentPersona(newPersona);
-                  const name = newPersona === "moderator" ? "Central Moderator" : SPOKES[newPersona.replace("spoke-", "")]?.name;
+                  const name = newPersona === "moderator" ? "Central Moderator" : newPersona === "company" ? "Corporate Sponsor (NVIDIA)" : SPOKES[newPersona.replace("spoke-", "")]?.name;
+                  if (newPersona === "company") {
+                    setActiveWorkspace("company");
+                  } else {
+                    setActiveWorkspace(newPersona === "moderator" ? "hub" : newPersona);
+                  }
                   triggerToast(`Switched Profile: Active permissions set to ${name}`);
                 }}
                 style={{
@@ -1846,11 +2087,12 @@ function App() {
                   fontFamily: "var(--font-sans)"
                 }}
               >
-                <option value="moderator">👑 Central Moderator (Full)</option>
-                <option value="spoke-kle">🏢 KLE Coordinator (Private)</option>
-                <option value="spoke-coep">🏢 COEP Coordinator (Private)</option>
-                <option value="spoke-mmcoep">🏢 MMCOEP Coordinator (Private)</option>
-                <option value="spoke-rit">🏢 RIT Coordinator (Private)</option>
+                <option value="moderator">Central Moderator (Full)</option>
+                <option value="company">Corporate Sponsor (NVIDIA)</option>
+                <option value="spoke-kle">KLE Coordinator (Private)</option>
+                <option value="spoke-coep">COEP Coordinator (Private)</option>
+                <option value="spoke-mmcoep">MMCOEP Coordinator (Private)</option>
+                <option value="spoke-rit">RIT Coordinator (Private)</option>
               </select>
             </div>
           )}
@@ -1875,6 +2117,13 @@ function App() {
                 collapsed={isSidebarCollapsed}
                 onClick={() => setActiveView("kanban")}
               />
+              <SidebarNavItem
+                active={activeView === "projects"}
+                icon={<FaBriefcase size={16} />}
+                label="Project Portfolio"
+                collapsed={isSidebarCollapsed}
+                onClick={() => setActiveView("projects")}
+              />
               <hr style={{ border: "none", borderTop: "1px solid var(--border-glass)", margin: "8px 0" }} />
             </>
           )}
@@ -1890,7 +2139,7 @@ function App() {
             <>
               <SidebarNavItem
                 active={activeWorkspace === "hub"}
-                icon={<span style={{ fontSize: "16px" }}>🌐</span>}
+                icon={<LayoutDashboard size={18} style={{ color: "var(--primary)" }} />}
                 label="Executive HUB"
                 collapsed={isSidebarCollapsed}
                 onClick={() => setActiveWorkspace("hub")}
@@ -1904,10 +2153,22 @@ function App() {
               />
               <SidebarNavItem
                 active={activeWorkspace === "meetings"}
-                icon={<span style={{ fontSize: "16px" }}>📅</span>}
+                icon={<CalendarDays size={18} style={{ color: "var(--secondary)" }} />}
                 label="Meetings & Syncs"
                 collapsed={isSidebarCollapsed}
                 onClick={() => setActiveWorkspace("meetings")}
+              />
+            </>
+          )}
+
+          {currentPersona === "company" && (
+            <>
+              <SidebarNavItem
+                active={activeWorkspace === "company"}
+                icon={<FaBriefcase size={16} style={{ color: "var(--accent)" }} />}
+                label="Sponsor Portal"
+                collapsed={isSidebarCollapsed}
+                onClick={() => setActiveWorkspace("company")}
               />
             </>
           )}
@@ -1916,7 +2177,7 @@ function App() {
           {(currentPersona === "moderator" || currentPersona === "spoke-kle") && (
             <SidebarNavItem
               active={activeWorkspace === "spoke-kle"}
-              icon={<span style={{ fontWeight: "800", color: "var(--primary)" }}>🏢</span>}
+              icon={<Building2 size={18} style={{ color: "var(--primary)" }} />}
               label="KLE Spoke (Live)"
               collapsed={isSidebarCollapsed}
               onClick={() => {
@@ -1928,7 +2189,7 @@ function App() {
           {(currentPersona === "moderator" || currentPersona === "spoke-coep") && (
             <SidebarNavItem
               active={activeWorkspace === "spoke-coep"}
-              icon={<span style={{ fontWeight: "800", color: "var(--secondary)" }}>🏢</span>}
+              icon={<Building2 size={18} style={{ color: "var(--secondary)" }} />}
               label="COEP Spoke (Live)"
               collapsed={isSidebarCollapsed}
               onClick={() => {
@@ -1940,7 +2201,7 @@ function App() {
           {(currentPersona === "moderator" || currentPersona === "spoke-mmcoep") && (
             <SidebarNavItem
               active={activeWorkspace === "spoke-mmcoep"}
-              icon={<span style={{ fontWeight: "800", color: "var(--accent)" }}>🏢</span>}
+              icon={<Building2 size={18} style={{ color: "var(--accent)" }} />}
               label="MMCOEP Spoke (Live)"
               collapsed={isSidebarCollapsed}
               onClick={() => {
@@ -1952,7 +2213,7 @@ function App() {
           {(currentPersona === "moderator" || currentPersona === "spoke-rit") && (
             <SidebarNavItem
               active={activeWorkspace === "spoke-rit"}
-              icon={<span style={{ fontWeight: "800", color: "var(--primary)" }}>🏢</span>}
+              icon={<Building2 size={18} style={{ color: "var(--primary)" }} />}
               label="RIT Spoke (Live)"
               collapsed={isSidebarCollapsed}
               onClick={() => {
@@ -1989,16 +2250,16 @@ function App() {
         {/* Sidebar Footer User Detail */}
         <div style={{
           display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
+          flexDirection: "column",
+          gap: "14px",
           paddingTop: "16px",
           borderTop: "1px solid var(--border-glass)"
         }}>
-          <div style={{ display: "flex", alignItems: "center", gap: "12px", overflow: "hidden" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "12px", overflow: "hidden", width: "100%", justifyContent: isSidebarCollapsed ? "center" : "flex-start" }}>
             <img
               src={currentUser?.avatarUrls?.["48x48"] || "https://i.pravatar.cc/100?img=64"}
               alt="Logged user profile"
-              style={{ width: "36px", height: "36px", borderRadius: "50%", border: "2px solid var(--primary)" }}
+              style={{ width: "36px", height: "36px", borderRadius: "50%", border: "2px solid var(--primary)", flexShrink: 0 }}
             />
             {!isSidebarCollapsed && (
               <div style={{ display: "flex", flexDirection: "column", overflow: "hidden" }}>
@@ -2011,28 +2272,39 @@ function App() {
               </div>
             )}
           </div>
-          {!isSidebarCollapsed && (
-            <button
-              onClick={handleLogout}
-              title="Log Out"
-              style={{
-                background: "rgba(239, 68, 68, 0.1)",
-                border: "1px solid rgba(239, 68, 68, 0.2)",
-                color: "#f87171",
-                cursor: "pointer",
-                padding: "6px",
-                borderRadius: "6px",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                transition: "all 0.2s"
-              }}
-              onMouseEnter={(e) => e.currentTarget.style.background = "rgba(239, 68, 68, 0.2)"}
-              onMouseLeave={(e) => e.currentTarget.style.background = "rgba(239, 68, 68, 0.1)"}
-            >
-              <FaTimes size={12} />
-            </button>
-          )}
+          
+          <button
+            onClick={handleSignOutWithConfirmation}
+            style={{
+              background: "rgba(239, 68, 68, 0.08)",
+              border: "1px solid rgba(239, 68, 68, 0.2)",
+              color: "#f87171",
+              cursor: "pointer",
+              padding: isSidebarCollapsed ? "8px" : "10px 14px",
+              borderRadius: "10px",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: "8px",
+              fontSize: "12px",
+              fontWeight: "700",
+              width: "100%",
+              transition: "all 0.25s cubic-bezier(0.4, 0, 0.2, 1)"
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = "rgba(239, 68, 68, 0.18)";
+              e.currentTarget.style.borderColor = "rgba(239, 68, 68, 0.35)";
+              e.currentTarget.style.boxShadow = "0 0 10px rgba(239, 68, 68, 0.1)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "rgba(239, 68, 68, 0.08)";
+              e.currentTarget.style.borderColor = "rgba(239, 68, 68, 0.2)";
+              e.currentTarget.style.boxShadow = "none";
+            }}
+          >
+            <LogOut size={isSidebarCollapsed ? 15 : 13} />
+            {!isSidebarCollapsed && <span>Sign Out</span>}
+          </button>
         </div>
       </aside>
 
@@ -2054,7 +2326,9 @@ function App() {
                 : activeWorkspace === "moderator"
                 ? "Moderator Project Assignment"
                 : activeWorkspace === "meetings"
-                ? "📅 FIP Sync Meetings & Collaboration"
+                ? "FIP Sync Meetings & Collaboration"
+                : activeWorkspace === "company"
+                ? "Corporate Partner Sponsorship Portal"
                 : activeView === "dashboard"
                 ? `${activeWorkspace === "playground" ? "Playground" : SPOKES[currentBoardId]?.name || "Spoke"} Analytics Dashboard`
                 : `${activeWorkspace === "playground" ? "Playground" : SPOKES[currentBoardId]?.name || "Spoke"} Active Sprint Kanban`}
@@ -2066,6 +2340,8 @@ function App() {
                 ? "Intake projects from industry partners and automatically provision them directly to campus spaces."
                 : activeWorkspace === "meetings"
                 ? "Schedule campus sprint syncs, manage agendas, and auto-dispatch pre-meeting overdue warning digests."
+                : activeWorkspace === "company"
+                ? "Propose new corporate projects, monitor active campus sponsorships, and track student engineering deliverables."
                 : activeView === "dashboard" 
                 ? "Key performance metrics, sprint load status, priorities summary and deadline risks." 
                 : "Drag issues across columns to transition status, update fields, or track work progression."
@@ -2343,6 +2619,14 @@ function App() {
             }}
             triggerToast={triggerToast}
           />
+        ) : activeWorkspace === "company" ? (
+          <CompanySponsorView
+            projects={moderatorProjects}
+            loading={isModeratorLoading}
+            onRefresh={() => fetchModeratorProjects(false)}
+            sessionUser={sessionUser}
+            triggerToast={triggerToast}
+          />
         ) : activeWorkspace === "meetings" ? (
           <MeetingsPortalView
             meetings={meetings}
@@ -2370,7 +2654,7 @@ function App() {
               }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: "12px" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                    <span style={{ fontSize: "28px" }}>🎉</span>
+                    <span style={{ fontSize: "28px" }}></span>
                     <div>
                       <h4 style={{ margin: 0, fontSize: "16px", fontWeight: "850", color: "var(--text-main)" }}>
                         New Corporate Project Proposed!
@@ -2420,13 +2704,13 @@ function App() {
                     </p>
                     <div style={{ display: "flex", gap: "20px", marginTop: "12px", flexWrap: "wrap" }}>
                       <span style={{ fontSize: "12.5px", color: "var(--text-main)" }}>
-                        💰 <strong>Budget:</strong> {proj.budget}
+                        <strong>Budget:</strong> {proj.budget}
                       </span>
                       <span style={{ fontSize: "12.5px", color: "var(--text-main)" }}>
-                        ⏱️ <strong>Duration:</strong> {proj.duration}
+                        ️ <strong>Duration:</strong> {proj.duration}
                       </span>
                       <span style={{ fontSize: "12.5px", color: "var(--text-main)" }}>
-                        📅 <strong>Proposed Deadline:</strong> <em>{proj.proposedDueDate}</em>
+                        <strong>Proposed Deadline:</strong> <em>{proj.proposedDueDate}</em>
                       </span>
                     </div>
                   </div>
@@ -2454,7 +2738,7 @@ function App() {
                         cursor: "pointer"
                       }}
                     >
-                      ❌ Decline Proposal
+                      Decline Proposal
                     </button>
                     <button
                       onClick={() => handleAcceptProject(proj.id)}
@@ -2469,7 +2753,7 @@ function App() {
                         cursor: "pointer"
                       }}
                     >
-                      🚀 Accept Project & Provision Jira Board
+                      Accept Project & Provision Jira Board
                     </button>
                   </div>
                 )}
@@ -2501,7 +2785,7 @@ function App() {
               }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid var(--border-glass)", paddingBottom: "12px" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                    <span style={{ fontSize: "24px" }}>📅</span>
+                    <span style={{ fontSize: "24px" }}></span>
                     <h4 style={{ margin: 0, fontSize: "15px", fontWeight: "850", color: "var(--text-main)" }}>
                       Today's FIP Sprint Syncs Scheduled ({todayMeetingsForSpoke.length})
                     </h4>
@@ -2519,7 +2803,7 @@ function App() {
                       alignItems: "center",
                       gap: "4px"
                     }} className="pulse-glow">
-                      ⚠️ OVERLAP CONFLICT
+                      ️ OVERLAP CONFLICT
                     </span>
                   )}
                 </div>
@@ -2538,7 +2822,7 @@ function App() {
                     fontWeight: "600",
                     lineHeight: "1.4"
                   }}>
-                    <span>⚠️</span>
+                    <span>️</span>
                     <span>
                       <strong>Schedule Conflict:</strong> Multiple meetings are scheduled at the same time today. Please coordinate to resolve the conflict.
                     </span>
@@ -2577,7 +2861,7 @@ function App() {
                               borderRadius: "4px",
                               fontFamily: "var(--mono)"
                             }}>
-                              ⏰ {meet.time}
+                              {meet.time}
                             </span>
                             {hasConflict && (
                               <span style={{
@@ -2589,7 +2873,7 @@ function App() {
                                 padding: "2px 6px",
                                 borderRadius: "4px"
                               }} className="pulse-glow">
-                                ⚠️ Time Conflict
+                                ️ Time Conflict
                               </span>
                             )}
                             <strong style={{ fontSize: "14.5px", color: "var(--text-main)" }}>{meet.title}</strong>
@@ -2618,8 +2902,7 @@ function App() {
                               : "0 4px 12px rgba(45, 212, 191, 0.15)"
                           }}
                         >
-                          Join Meeting 🚀
-                        </a>
+                          Join Meeting </a>
                       </div>
                     );
                   })}
@@ -2684,7 +2967,7 @@ function App() {
                     gap: "16px"
                   }}>
                     <div style={{ display: "flex", alignItems: "center", gap: "10px", borderBottom: "1px solid var(--border-glass)", paddingBottom: "12px" }}>
-                      <span style={{ fontSize: "20px" }}>💼</span>
+                      <span style={{ fontSize: "20px" }}></span>
                       <h3 style={{ margin: 0, fontSize: "15px", fontWeight: "850", color: "var(--text-main)", letterSpacing: "-0.2px" }}>
                         Active Corporate Projects Accepted by {SPOKES[currentBoardId]?.name || "Our Campus"} Spoke
                       </h3>
@@ -2715,7 +2998,7 @@ function App() {
                           daysClassColor = "var(--accent)";
                           daysBgColor = "rgba(251, 146, 60, 0.15)";
                         } else if (diffDays <= 7) {
-                          daysText = `Only ${diffDays}d left! ⏰`;
+                          daysText = `Only ${diffDays}d left! `;
                           daysClassColor = "var(--accent)";
                           daysBgColor = "rgba(251, 146, 60, 0.12)";
                         } else {
@@ -2780,8 +3063,8 @@ function App() {
                                   </p>
                                   <div style={{ display: "flex", gap: "16px", marginTop: "8px", flexWrap: "wrap", fontSize: "11.5px", color: "var(--text-dim)" }}>
                                     <span>Jira Epic: <strong style={{ color: "var(--text-main)", fontFamily: "var(--mono)" }}>{epicKey || "Epic Provisioned"}</strong></span>
-                                    <span>💰 Budget: <strong style={{ color: "var(--text-main)" }}>{proj.budget}</strong></span>
-                                    <span>📅 Ingested: <strong style={{ color: "var(--text-main)" }}>{proj.dateAdded}</strong></span>
+                                    <span>Budget: <strong style={{ color: "var(--text-main)" }}>{proj.budget}</strong></span>
+                                    <span>Ingested: <strong style={{ color: "var(--text-main)" }}>{proj.dateAdded}</strong></span>
                                   </div>
                                 </div>
                               </div>
@@ -2817,7 +3100,7 @@ function App() {
                               gap: "8px"
                             }}>
                               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "12px" }}>
-                                <span style={{ fontWeight: "750", color: "var(--text-muted)" }}>🏢 Project Milestone Completion</span>
+                                <span style={{ fontWeight: "750", color: "var(--text-muted)" }}>Project Milestone Completion</span>
                                 <strong style={{ color: "var(--primary)", fontFamily: "var(--mono)" }}>{progressPct}% ({doneT} of {totalT} Phases Done)</strong>
                               </div>
                               <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
@@ -2857,7 +3140,7 @@ function App() {
                                       }}>
                                         <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0, flex: 1 }}>
                                           <span style={{ color: isTDone ? "#2dd4bf" : "var(--text-muted)", fontSize: "12px" }}>
-                                            {isTDone ? "🟢" : "🔘"}
+                                            {isTDone ? "🟢" : ""}
                                           </span>
                                           <span style={{
                                             color: isTDone ? "var(--text-dim)" : "var(--text-main)",
@@ -2871,7 +3154,7 @@ function App() {
                                           </span>
                                         </div>
                                         <div style={{ display: "flex", alignItems: "center", gap: "10px", shrink: 0 }}>
-                                          <span style={{ fontSize: "11px", color: "var(--text-dim)" }}>⏰ {tDue}</span>
+                                          <span style={{ fontSize: "11px", color: "var(--text-dim)" }}>{tDue}</span>
                                           <span style={{
                                             fontSize: "9px",
                                             fontWeight: "900",
@@ -3131,13 +3414,13 @@ function App() {
                         >
                           <ColumnHeader
                             title="Backlog"
-                            count={filteredTasks.filter(t => t.fields.status.name === "Backlog").length}
+                            count={filteredTasks.filter(t => ["Backlog", "To Do", "Open"].includes(t.fields.status.name)).length}
                             color="var(--status-backlog-text)"
                             bgColor="var(--status-backlog-bg)"
                           />
                           <div style={{ display: "flex", flexDirection: "column", gap: "12px", overflowY: "auto", flex: 1 }}>
                             {filteredTasks
-                              .filter(t => t.fields.status.name === "Backlog")
+                              .filter(t => ["Backlog", "To Do", "Open"].includes(t.fields.status.name))
                               .map((task, idx) => (
                                 <DraggableCard key={task.id} task={task} index={idx} onClick={() => setSelectedTask(task)} />
                               ))}
@@ -3157,14 +3440,14 @@ function App() {
                         >
                           <ColumnHeader
                             title="In Progress"
-                            count={filteredTasks.filter(t => t.fields.status.name === "In Progress").length}
+                            count={filteredTasks.filter(t => ["In Progress", "In Review"].includes(t.fields.status.name)).length}
                             color="var(--status-progress-text)"
                             bgColor="var(--status-progress-bg)"
                             pulse={true}
                           />
                           <div style={{ display: "flex", flexDirection: "column", gap: "12px", overflowY: "auto", flex: 1 }}>
                             {filteredTasks
-                              .filter(t => t.fields.status.name === "In Progress")
+                              .filter(t => ["In Progress", "In Review"].includes(t.fields.status.name))
                               .map((task, idx) => (
                                 <DraggableCard key={task.id} task={task} index={idx} onClick={() => setSelectedTask(task)} />
                               ))}
@@ -3184,13 +3467,13 @@ function App() {
                         >
                           <ColumnHeader
                             title="Done"
-                            count={filteredTasks.filter(t => t.fields.status.name === "Done").length}
+                            count={filteredTasks.filter(t => ["Done", "Closed", "Resolved"].includes(t.fields.status.name)).length}
                             color="var(--status-done-text)"
                             bgColor="var(--status-done-bg)"
                           />
                           <div style={{ display: "flex", flexDirection: "column", gap: "12px", overflowY: "auto", flex: 1 }}>
                             {filteredTasks
-                              .filter(t => t.fields.status.name === "Done")
+                              .filter(t => ["Done", "Closed", "Resolved"].includes(t.fields.status.name))
                               .map((task, idx) => (
                                 <DraggableCard key={task.id} task={task} index={idx} onClick={() => setSelectedTask(task)} />
                               ))}
@@ -3202,6 +3485,98 @@ function App() {
 
                   </div>
                 </DragDropContext>
+              </div>
+            )}
+
+            {/* 3. PROJECT PORTFOLIO VIEW */}
+            {activeView === "projects" && (
+              <div className="fade-in" style={{ flex: 1, padding: "24px", overflowY: "auto" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "30px" }}>
+                  <div>
+                    <h1 style={{ margin: 0, fontSize: "28px", fontWeight: "800", color: "var(--text-main)", letterSpacing: "-0.5px" }}>Project Portfolio</h1>
+                    <p style={{ margin: "6px 0 0 0", color: "var(--text-muted)", fontSize: "14px" }}>Manage accepted corporate contracts, budgets, and assign faculty leads.</p>
+                  </div>
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))", gap: "24px" }}>
+                  {acceptedProjectsForSpoke.length > 0 ? (
+                    acceptedProjectsForSpoke.map(proj => {
+                      const allocation = proj.allocations?.find(a => a.targetCampusId === currentBoardId);
+                      const assignedFaculty = allocation?.assignedTo || proj.assignedTo;
+                      const progress = allocation?.progressPercent || 0;
+                      
+                      return (
+                        <div key={proj.id} className="glass-panel" style={{ padding: "24px", display: "flex", flexDirection: "column", gap: "16px", border: "1px solid rgba(255,255,255,0.06)", borderRadius: "16px", position: "relative", overflow: "hidden" }}>
+                          
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                              <div style={{ width: "42px", height: "42px", borderRadius: "10px", background: "white", padding: "6px", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                                <img src={proj.logoUrl} alt={proj.company} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
+                              </div>
+                              <div>
+                                <h3 style={{ margin: 0, fontSize: "16px", color: "var(--text-main)", fontWeight: "700" }}>{proj.title}</h3>
+                                <div style={{ fontSize: "12px", color: "var(--text-muted)", marginTop: "2px", fontWeight: "600", textTransform: "uppercase", letterSpacing: "0.5px" }}>{proj.company}</div>
+                              </div>
+                            </div>
+                            <div style={{ background: "rgba(16, 185, 129, 0.15)", color: "#10b981", padding: "4px 10px", borderRadius: "20px", fontSize: "11px", fontWeight: "700" }}>Accepted</div>
+                          </div>
+
+                          <p style={{ margin: 0, fontSize: "13px", color: "var(--text-muted)", lineHeight: "1.5", flex: 1 }}>{proj.description}</p>
+                          
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", background: "rgba(0,0,0,0.2)", padding: "12px", borderRadius: "10px" }}>
+                            <div>
+                              <div style={{ fontSize: "10px", color: "var(--text-dim)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "4px" }}>Budget</div>
+                              <div style={{ fontSize: "13px", color: "var(--text-main)", fontWeight: "600" }}>{proj.budget}</div>
+                            </div>
+                            <div>
+                              <div style={{ fontSize: "10px", color: "var(--text-dim)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "4px" }}>Duration</div>
+                              <div style={{ fontSize: "13px", color: "var(--text-main)", fontWeight: "600" }}>{proj.duration}</div>
+                            </div>
+                          </div>
+
+                          <div>
+                            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", fontWeight: "700", marginBottom: "6px" }}>
+                              <span style={{ color: "var(--text-muted)" }}>Project Progress</span>
+                              <span style={{ color: "var(--primary)" }}>{progress}%</span>
+                            </div>
+                            <div style={{ height: "6px", background: "rgba(255,255,255,0.05)", borderRadius: "10px", overflow: "hidden" }}>
+                              <div style={{ height: "100%", width: `${progress}%`, background: "linear-gradient(90deg, var(--primary), var(--secondary))", borderRadius: "10px", transition: "width 0.5s ease" }} />
+                            </div>
+                          </div>
+
+                          <div style={{ marginTop: "8px", paddingTop: "16px", borderTop: "1px solid rgba(255,255,255,0.05)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                              <div style={{ width: "28px", height: "28px", borderRadius: "50%", background: assignedFaculty ? "var(--accent)" : "rgba(255,255,255,0.1)", display: "flex", alignItems: "center", justifyContent: "center", color: "white", fontSize: "12px", fontWeight: "bold" }}>
+                                {assignedFaculty ? assignedFaculty.charAt(0) : "?"}
+                              </div>
+                              <div style={{ fontSize: "13px", color: assignedFaculty ? "var(--text-main)" : "var(--text-muted)", fontWeight: "600" }}>
+                                {assignedFaculty ? assignedFaculty : "No Faculty Assigned"}
+                              </div>
+                            </div>
+                            
+                            {!assignedFaculty && (
+                              <button 
+                                onClick={() => {
+                                  const name = window.prompt("Enter the name of the Faculty member to assign as Lead:");
+                                  if (name) handleAssignFacultyToProject(proj.id, name);
+                                }}
+                                className="btn-glow"
+                                style={{ padding: "6px 12px", background: "var(--primary)", border: "none", borderRadius: "6px", color: "white", fontSize: "11px", fontWeight: "700", cursor: "pointer" }}
+                              >
+                                Assign
+                              </button>
+                            )}
+                          </div>
+
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <div style={{ gridColumn: "1 / -1" }}>
+                      <EmptyStateMessage text="No active project contracts. Awaiting incoming corporate proposals." showIcon={true} />
+                    </div>
+                  )}
+                </div>
               </div>
             )}
           </>
@@ -3226,7 +3601,7 @@ function App() {
         ))}
       </div>
 
-      {/* 🚀 MODAL 1: NEW TASK CREATION */}
+      {/* MODAL 1: NEW TASK CREATION */}
       {isCreateOpen && (
         <div style={modalBackdropStyle}>
           <div className="glass-panel" style={{
@@ -3278,10 +3653,10 @@ function App() {
                   value={newIssueType}
                   onChange={(e) => setNewIssueType(e.target.value)}
                 >
-                  <option value="Task">📋 Task</option>
-                  <option value="Story">📖 Story</option>
-                  <option value="Bug">🐛 Bug</option>
-                  <option value="Epic">👑 Epic</option>
+                  <option value="Task">Task</option>
+                  <option value="Story">Story</option>
+                  <option value="Bug">Bug</option>
+                  <option value="Epic">Epic</option>
                 </select>
               </div>
 
@@ -3373,7 +3748,7 @@ function App() {
         </div>
       )}
 
-      {/* 📝 MODAL 2: TASK DETAIL AND EDITOR */}
+      {/* MODAL 2: TASK DETAIL AND EDITOR */}
       {selectedTask && (
         <div style={modalBackdropStyle}>
           <div className="glass-panel" style={{
@@ -3423,9 +3798,9 @@ function App() {
                       selectedTask.fields.issueType === "Bug" ? "rgba(239, 68, 68, 0.25)" :
                       selectedTask.fields.issueType === "Story" ? "rgba(16, 185, 129, 0.25)" : "rgba(59, 130, 246, 0.25)"
                   }}>
-                    {selectedTask.fields.issueType === "Epic" ? "👑 Epic" :
-                     selectedTask.fields.issueType === "Bug" ? "🐛 Bug" :
-                     selectedTask.fields.issueType === "Story" ? "📖 Story" : "📋 Task"}
+                    {selectedTask.fields.issueType === "Epic" ? "Epic" :
+                     selectedTask.fields.issueType === "Bug" ? "Bug" :
+                     selectedTask.fields.issueType === "Story" ? "Story" : "Task"}
                   </span>
                 )}
               </div>
@@ -3490,10 +3865,10 @@ function App() {
                     transition: "var(--transition-smooth)"
                   }}
                 >
-                  {tabName === "overview" && "📋 General"}
-                  {tabName === "subtasks" && (selectedTask.fields.issueType === "Epic" ? `👑 Epic Tasks (${currentTaskChildren.length})` : `☑️ Subtasks (${currentTaskChildren.length})`)}
-                  {tabName === "worklog" && "⏱️ Worklogs"}
-                  {tabName === "links" && "🏷️ Links & Tags"}
+                  {tabName === "overview" && "General"}
+                  {tabName === "subtasks" && (selectedTask.fields.issueType === "Epic" ? `Epic Tasks (${currentTaskChildren.length})` : `️ Subtasks (${currentTaskChildren.length})`)}
+                  {tabName === "worklog" && "️ Worklogs"}
+                  {tabName === "links" && "️ Links & Tags"}
                 </button>
               ))}
             </div>
@@ -3519,10 +3894,10 @@ function App() {
                   }}>
                     <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
                       <span style={{ fontSize: "13.5px", fontWeight: "700", color: selectedTask.fields.flagged ? "var(--accent)" : "var(--text-main)" }}>
-                        ⚠️ Blocker Flag Impediment
+                        ️ Blocker Flag Impediment
                       </span>
                       <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>
-                        {selectedTask.fields.flagged ? "🚨 Card flashing active on Kanban board." : "Flag issue as blocked by a dependency."}
+                        {selectedTask.fields.flagged ? "Card flashing active on Kanban board." : "Flag issue as blocked by a dependency."}
                       </span>
                     </div>
                     <button
@@ -3540,7 +3915,7 @@ function App() {
                         cursor: currentPersona === "moderator" ? "not-allowed" : "pointer"
                       }}
                     >
-                      {selectedTask.fields.flagged ? "🚨 Blocked" : "Flag Blocker"}
+                      {selectedTask.fields.flagged ? "Blocked" : "Flag Blocker"}
                     </button>
                   </div>
 
@@ -3724,7 +4099,7 @@ function App() {
                     </div>
                   </div>
 
-                  {/* 📅 Due Date & Email reminder alerts */}
+                  {/* Due Date & Email reminder alerts */}
                   <div style={{
                     display: "grid",
                     gridTemplateColumns: "1fr 1fr",
@@ -3736,7 +4111,7 @@ function App() {
                     alignItems: "center"
                   }}>
                     <div>
-                      <label style={modalLabelStyle}>📅 Target Due Date</label>
+                      <label style={modalLabelStyle}>Target Due Date</label>
                       <input
                         type="date"
                         disabled={currentPersona === "moderator"}
@@ -3784,7 +4159,7 @@ function App() {
               {modalTab === "subtasks" && (
                 <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
                   <h3 style={{ fontSize: "13.5px", fontWeight: "700", textTransform: "uppercase", letterSpacing: "0.5px", color: "var(--text-muted)" }}>
-                    {selectedTask.fields.issueType === "Epic" ? "👑 Epic Child Tasks" : "☑️ Child Checklist Items"}
+                    {selectedTask.fields.issueType === "Epic" ? "Epic Child Tasks" : "️ Child Checklist Items"}
                   </h3>
 
                   {/* Add subtask inline form */}
@@ -3808,7 +4183,7 @@ function App() {
                         onChange={(e) => setSubtaskAssigneeId(e.target.value)}
                         style={{ flex: "1 1 150px", padding: "10px 14px", fontSize: "13px", height: "auto" }}
                       >
-                        <option value="">👤 Assignee...</option>
+                        <option value="">Assignee...</option>
                         {activeAssignees.map(member => (
                           <option key={member.accountId} value={member.accountId}>
                             {member.name}
@@ -3886,7 +4261,7 @@ function App() {
                 <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <h3 style={{ fontSize: "13.5px", fontWeight: "700", textTransform: "uppercase", letterSpacing: "0.5px", color: "var(--text-muted)" }}>
-                      ⏱️ Log Spent Hours
+                      ️ Log Spent Hours
                     </h3>
                     {selectedTask.fields.timetracking && (
                       <span style={{ fontSize: "12px", color: "var(--primary)", fontWeight: "700" }}>
@@ -3951,7 +4326,7 @@ function App() {
                             }}
                           >
                             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}>
-                              <span style={{ fontWeight: "700", color: "var(--primary)" }}>⏱️ {log.timeSpent} spent</span>
+                              <span style={{ fontWeight: "700", color: "var(--primary)" }}>️ {log.timeSpent} spent</span>
                               <span style={{ color: "var(--text-dim)", fontSize: "10.5px" }}>{new Date(log.created).toLocaleDateString()}</span>
                             </div>
                             <p style={{ color: "var(--text-main)", fontStyle: "italic", margin: "0 0 4px 0", fontSize: "12px" }}>
@@ -3979,7 +4354,7 @@ function App() {
                   {/* Labels Organizer */}
                   <div>
                     <h3 style={{ fontSize: "13.5px", fontWeight: "700", textTransform: "uppercase", letterSpacing: "0.5px", color: "var(--text-muted)", marginBottom: "8px" }}>
-                      🏷️ Labels & Custom Tags
+                      ️ Labels & Custom Tags
                     </h3>
                     <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginBottom: "10px" }}>
                       {selectedTask.fields.labels && selectedTask.fields.labels.length > 0 ? (
@@ -4046,7 +4421,7 @@ function App() {
                   {/* Issue dependency linking */}
                   <div>
                     <h3 style={{ fontSize: "13.5px", fontWeight: "700", textTransform: "uppercase", letterSpacing: "0.5px", color: "var(--text-muted)", marginBottom: "8px" }}>
-                      🔗 Issue Dependency Relations
+                      Issue Dependency Relations
                     </h3>
 
                     {currentPersona !== "moderator" && (
@@ -4153,7 +4528,7 @@ function App() {
         </div>
       )}
 
-      {/* 📧 MODAL 3: INTERACTIVE EMAIL ALERT COMPOSER */}
+      {/* MODAL 3: INTERACTIVE EMAIL ALERT COMPOSER */}
       {isEmailOpen && (
         <div style={modalBackdropStyle}>
           <div className="glass-panel" style={{
@@ -4306,7 +4681,7 @@ function App() {
         </div>
       )}
 
-      {/* 🚀 MODAL 4: AUTOMATED B2B PROJECT ASSIGNMENT & PROVISIONING */}
+      {/* MODAL 4: AUTOMATED B2B PROJECT ASSIGNMENT & PROVISIONING */}
       {isAssignModalOpen && selectedAssignProject && (
         <div style={modalBackdropStyle}>
           <div className="glass-panel" style={{
@@ -4324,18 +4699,20 @@ function App() {
               <div style={{
                 position: "absolute",
                 inset: 0,
-                background: "rgba(3, 7, 18, 0.96)",
+                background: "rgba(3, 7, 18, 0.95)",
+                backdropFilter: "blur(12px)",
                 display: "flex",
                 flexDirection: "column",
                 alignItems: "center",
                 justifyContent: "center",
-                zIndex: 100,
-                gap: "24px"
+                zIndex: 2000,
+                gap: "24px",
+                padding: "30px"
               }}>
                 <div style={{
                   width: "60px",
                   height: "60px",
-                  border: "4px solid rgba(45, 212, 191, 0.1)",
+                  border: "5px solid rgba(99, 102, 241, 0.1)",
                   borderTopColor: "var(--primary)",
                   borderRadius: "50%",
                 }} className="pulse-glow"></div>
@@ -4354,7 +4731,7 @@ function App() {
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "24px" }}>
               <div>
                 <h2 style={{ fontSize: "19px", fontWeight: "800", color: "var(--text-main)", display: "flex", alignItems: "center", gap: "8px" }}>
-                  <span>🤝 Allocate Sponsor Project</span>
+                  <span>Allocate Sponsor Project</span>
                 </h2>
                 <span style={{ fontSize: "12px", color: "var(--text-muted)" }}>
                   Assigning <strong>{selectedAssignProject.title}</strong> by <strong>{selectedAssignProject.company}</strong>
@@ -4380,10 +4757,10 @@ function App() {
                   onChange={(e) => setAssignTargetCampus(e.target.value)}
                   style={{ width: "100%", padding: "10px 14px", height: "42px", fontSize: "14px" }}
                 >
-                  <option value="3">🏢 KLE Spoke (Live Jira - Key: AK)</option>
-                  <option value="101">🏢 COEP Spoke (Live Jira - Key: AK)</option>
-                  <option value="102">🏢 MMCOEP Spoke (Live Jira - Key: AK)</option>
-                  <option value="103">🏢 RIT Spoke (Live Jira - Key: AK)</option>
+                  <option value="3">KLE Spoke (Live Jira - Key: AK)</option>
+                  <option value="101">COEP Spoke (Live Jira - Key: AK)</option>
+                  <option value="102">MMCOEP Spoke (Live Jira - Key: AK)</option>
+                  <option value="103">RIT Spoke (Live Jira - Key: AK)</option>
                 </select>
                 <p style={{ fontSize: "11px", color: "var(--text-dim)", marginTop: "6px", lineHeight: "1.4" }}>
                   All Spoke campuses are 100% active and connected directly to their backing Agile boards in your Atlassian Jira Cloud instance.
@@ -4401,29 +4778,24 @@ function App() {
                   onChange={(e) => setAssignDueDate(e.target.value)}
                   style={{ width: "100%", padding: "10px 14px", height: "42px", fontSize: "14px", colorScheme: theme === "dark" ? "dark" : "light" }}
                 />
-                <p style={{ fontSize: "11px", color: "var(--text-dim)", marginTop: "6px", lineHeight: "1.4" }}>
-                  This date represents the final FIP delivery deadline. The system will automatically compute and provision intermediate milestones for Phase 1 (30% of duration), Phase 2 (60%), and Phase 3 (100%).
+                 <p style={{ fontSize: "11px", color: "var(--text-dim)", marginTop: "6px", lineHeight: "1.4" }}>
+                  This date represents the final FIP delivery deadline. The system will automatically provision the custom initial workstream assigned by the company, allowing the Spoke Coordinator to build upon it.
                 </p>
               </div>
 
-              {/* Standard FIP Workstreams Preview */}
+              {/* Custom Initial Workstream Preview */}
               <div className="glass-panel" style={{ padding: "16px", background: "rgba(255,255,255,0.01)", border: "1px solid rgba(255,255,255,0.03)", borderRadius: "10px" }}>
                 <h4 style={{ fontSize: "11.5px", fontWeight: "800", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "12px" }}>
-                  ⚙️ Standard Auto-Provisioned Workstreams
+                  📦 Initial Auto-Provisioned Workstream
                 </h4>
                 <div style={{ display: "flex", flexDirection: "column", gap: "8px", fontSize: "12.5px" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: "8px", color: "var(--text-main)" }}>
-                    <span style={{ color: "var(--primary)", fontWeight: "bold" }}>1.</span>
-                    <span>Phase 1: Lab Infrastructure Setup & Hardware Procurement</span>
+                  <div style={{ display: "flex", alignItems: "flex-start", gap: "8px", color: "var(--text-main)", lineHeight: "1.4" }}>
+                    <span style={{ color: "var(--primary)", fontWeight: "bold" }}>⚡</span>
+                    <span>{selectedAssignProject.initialWorkstream || "Phase 1: Lab Infrastructure Setup & Hardware Procurement"}</span>
                   </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: "8px", color: "var(--text-main)" }}>
-                    <span style={{ color: "var(--primary)", fontWeight: "bold" }}>2.</span>
-                    <span>Phase 2: Faculty Upskilling & Student Cohort Selection</span>
-                  </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: "8px", color: "var(--text-main)" }}>
-                    <span style={{ color: "var(--primary)", fontWeight: "bold" }}>3.</span>
-                    <span>Phase 3: Development, Industry Mentorship & Evaluation</span>
-                  </div>
+                  <p style={{ fontSize: "11px", color: "var(--text-dim)", margin: "4px 0 0 0", lineHeight: "1.4" }}>
+                    Coordinators can create additional workstreams as needed after accepting.
+                  </p>
                 </div>
               </div>
 
@@ -4447,8 +4819,7 @@ function App() {
                     boxShadow: "0 4px 12px rgba(239, 68, 68, 0.2)"
                   }}
                 >
-                  Automate Provisioning ➔
-                </button>
+                  Automate Provisioning </button>
               </div>
             </form>
 
@@ -4456,12 +4827,78 @@ function App() {
         </div>
       )}
 
+      {/* MODAL 5: SIGN OUT CONFIRMATION */}
+      {isSignOutConfirmOpen && (
+        <div style={modalBackdropStyle}>
+          <div className="glass-panel" style={{
+            width: "420px",
+            padding: "30px",
+            border: "1.5px solid rgba(239, 68, 68, 0.15)",
+            boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.8)",
+            textAlign: "center",
+            position: "relative",
+            animation: "slideIn 0.25s cubic-bezier(0.16, 1, 0.3, 1)"
+          }}>
+            <div style={{
+              width: "56px",
+              height: "56px",
+              borderRadius: "50%",
+              background: "rgba(239, 68, 68, 0.08)",
+              border: "1px solid rgba(239, 68, 68, 0.2)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              margin: "0 auto 20px auto"
+            }} className="pulse-glow">
+              <LogOut size={24} color="#f87171" />
+            </div>
+
+            <h3 style={{ fontSize: "18px", fontWeight: "800", color: "var(--text-main)", marginBottom: "10px" }}>
+              Sign Out Confirmation
+            </h3>
+            
+            <p style={{ color: "var(--text-muted)", fontSize: "13.5px", lineHeight: "1.5", marginBottom: "26px" }}>
+              Are you sure you want to sign out of your active ApniLeap session? Any unsaved form progress will be lost.
+            </p>
+
+            <div style={{ display: "flex", gap: "12px", justifyContent: "center" }}>
+              <button
+                type="button"
+                onClick={() => setIsSignOutConfirmOpen(false)}
+                className="btn-secondary"
+                style={{ padding: "10px 24px", flex: 1, justifyContent: "center" }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsSignOutConfirmOpen(false);
+                  handleLogout();
+                }}
+                className="btn-primary"
+                style={{
+                  padding: "10px 24px",
+                  flex: 1,
+                  justifyContent: "center",
+                  background: "linear-gradient(135deg, #ef4444, #dc2626)",
+                  borderColor: "transparent",
+                  color: "#ffffff",
+                  boxShadow: "0 4px 15px rgba(239, 68, 68, 0.25)"
+                }}
+              >
+                Sign Out
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );
 }
 
-// 📌 SIDEBAR NAV ITEM HELPER
+// SIDEBAR NAV ITEM HELPER
 function SidebarNavItem({ active, icon, label, collapsed, onClick }) {
   return (
     <div
@@ -4504,7 +4941,7 @@ function SidebarNavItem({ active, icon, label, collapsed, onClick }) {
   );
 }
 
-// 📌 DASHBOARD METRIC CARD
+// DASHBOARD METRIC CARD
 function DashboardCard({ title, value, subtitle, themeColor, pulse, glow, progress, alert }) {
   return (
     <div
@@ -4597,7 +5034,7 @@ function DashboardCard({ title, value, subtitle, themeColor, pulse, glow, progre
   );
 }
 
-// 📌 COLUMNS HEADER FOR KANBAN
+// COLUMNS HEADER FOR KANBAN
 function ColumnHeader({ title, count, color, bgColor, pulse }) {
   return (
     <div style={{
@@ -4634,7 +5071,7 @@ function ColumnHeader({ title, count, color, bgColor, pulse }) {
   );
 }
 
-// 📌 DRAGGABLE TASK CARD (KANBAN BOARD)
+// DRAGGABLE TASK CARD (KANBAN BOARD)
 function DraggableCard({ task, index, onClick }) {
   const deadline = getDeadlineInfo(task.fields.dueDate, task.fields.status?.name);
 
@@ -4693,9 +5130,9 @@ function DraggableCard({ task, index, onClick }) {
                     task.fields.issueType === "Bug" ? "rgba(239, 68, 68, 0.25)" :
                     task.fields.issueType === "Story" ? "rgba(16, 185, 129, 0.25)" : "rgba(59, 130, 246, 0.25)"
                 }}>
-                  {task.fields.issueType === "Epic" ? "👑 Epic" :
-                   task.fields.issueType === "Bug" ? "🐛 Bug" :
-                   task.fields.issueType === "Story" ? "📖 Story" : "📋 Task"}
+                  {task.fields.issueType === "Epic" ? "Epic" :
+                   task.fields.issueType === "Bug" ? "Bug" :
+                   task.fields.issueType === "Story" ? "Story" : "Task"}
                 </span>
               )}
               {task.fields.flagged && (
@@ -4709,7 +5146,7 @@ function DraggableCard({ task, index, onClick }) {
                   padding: "2px 6px",
                   letterSpacing: "0.2px"
                 }}>
-                  🚨 BLOCKED
+                  BLOCKED
                 </span>
               )}
             </div>
@@ -4790,7 +5227,7 @@ function DraggableCard({ task, index, onClick }) {
                   alignItems: "center",
                   gap: "4px"
                 }} title="Subtask checklist completion">
-                  ☑️ {task.fields.subtasks.filter(s => s.statusName === "Done").length}/{task.fields.subtasks.length}
+                  ️ {task.fields.subtasks.filter(s => s.statusName === "Done").length}/{task.fields.subtasks.length}
                 </span>
               )}
             </div>
@@ -4832,7 +5269,7 @@ function DraggableCard({ task, index, onClick }) {
   );
 }
 
-// 📌 STATUS AND PRIORITY BADGES
+// STATUS AND PRIORITY BADGES
 function Badge({ status, priority }) {
   if (status) {
     const isDone = status === "Done";
@@ -4889,7 +5326,7 @@ function Badge({ status, priority }) {
   return null;
 }
 
-// 📌 EMPTY STATE VIEW
+// EMPTY STATE VIEW
 function EmptyStateMessage({ text, showIcon }) {
   return (
     <div style={{
@@ -4937,7 +5374,7 @@ const modalLabelStyle = {
 // ==========================================
 
 function HubDashboardView({ metrics, loading, onRefresh, moderatorProjects }) {
-  if (loading || !metrics) {
+  if (loading && !metrics) {
     return (
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "400px", gap: "16px" }}>
         <div style={{
@@ -5003,7 +5440,7 @@ function HubDashboardView({ metrics, loading, onRefresh, moderatorProjects }) {
         {/* Spokes Progress Bar Chart */}
         <div className="glass-panel" style={{ padding: "20px", display: "flex", flexDirection: "column", height: "360px" }}>
           <h3 style={{ fontSize: "15px", fontWeight: "700", marginBottom: "16px", textTransform: "uppercase", letterSpacing: "0.5px", color: "var(--text-muted)" }}>
-            📊 College Spoke Progress
+            College Spoke Progress
           </h3>
           <div style={{ flex: 1, minHeight: 0 }}>
             <ResponsiveContainer width="100%" height="100%">
@@ -5030,7 +5467,7 @@ function HubDashboardView({ metrics, loading, onRefresh, moderatorProjects }) {
         <div className="glass-panel" style={{ padding: "20px", display: "flex", flexDirection: "column", height: "360px" }}>
           <h3 style={{ fontSize: "15px", fontWeight: "700", marginBottom: "12px", textTransform: "uppercase", letterSpacing: "0.5px", color: "var(--priority-high-text)", display: "flex", alignItems: "center", gap: "8px" }}>
             <FaExclamationTriangle className="pulse-glow" style={{ borderRadius: "50%" }} />
-            <span>⚠️ Critical Blockers & Escalations</span>
+            <span>️ Critical Blockers & Escalations</span>
           </h3>
           
           <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: "10px", paddingRight: "4px" }}>
@@ -5084,7 +5521,7 @@ function HubDashboardView({ metrics, loading, onRefresh, moderatorProjects }) {
               ))
             ) : (
               <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", color: "var(--text-muted)", fontStyle: "italic", fontSize: "13px" }}>
-                <span>✨ No cross-college blockers active. Excellent execution!</span>
+                <span>No cross-college blockers active. Excellent execution!</span>
               </div>
             )}
           </div>
@@ -5094,7 +5531,7 @@ function HubDashboardView({ metrics, loading, onRefresh, moderatorProjects }) {
       {/* 15 Standard Workstreams Progress Matrix */}
       <div className="glass-panel" style={{ padding: "24px", display: "flex", flexDirection: "column", gap: "18px" }}>
         <h3 style={{ fontSize: "15px", fontWeight: "700", textTransform: "uppercase", letterSpacing: "0.5px", color: "var(--text-muted)" }}>
-          👑 15 Standard Workstreams Matrix
+          15 Standard Workstreams Matrix
         </h3>
         
         <div style={{ overflowX: "auto" }}>
@@ -5142,11 +5579,11 @@ function HubDashboardView({ metrics, loading, onRefresh, moderatorProjects }) {
         </div>
       </div>
 
-      {/* 💼 Active Corporate Partnerships Tracker */}
+      {/* Active Corporate Partnerships Tracker */}
       <div className="glass-panel" style={{ padding: "24px", display: "flex", flexDirection: "column", gap: "20px" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: "1px solid var(--border-glass)", paddingBottom: "16px", flexWrap: "wrap", gap: "12px" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-            <span style={{ fontSize: "20px" }}>💼</span>
+            <span style={{ fontSize: "20px" }}></span>
             <h3 style={{ margin: 0, fontSize: "15px", fontWeight: "850", textTransform: "uppercase", letterSpacing: "0.5px", color: "var(--text-muted)" }}>
               Corporate Partnerships & Campus Deployments
             </h3>
@@ -5261,7 +5698,7 @@ function HubDashboardView({ metrics, loading, onRefresh, moderatorProjects }) {
                             {/* Spoke Header */}
                             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "12px" }}>
                               <span style={{ fontWeight: "700", color: "var(--text-main)" }}>
-                                🏫 {alloc.assignedTo}
+                                {alloc.assignedTo}
                               </span>
                               <span style={{
                                 fontSize: "9px",
@@ -5326,7 +5763,7 @@ function HubDashboardView({ metrics, loading, onRefresh, moderatorProjects }) {
             })
           ) : (
             <div style={{ gridColumn: "1 / -1", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "120px", color: "var(--text-muted)", fontStyle: "italic", fontSize: "13px" }}>
-              <span>💼 No corporate projects active in the portfolio yet.</span>
+              <span>No corporate projects active in the portfolio yet.</span>
             </div>
           )}
         </div>
@@ -5377,7 +5814,7 @@ function ModeratorDashboardView({ projects, loading, onRefresh, onAssignClick, t
   const [auditLoading, setAuditLoading] = useState(false);
   const [auditResults, setAuditResults] = useState(null);
 
-  if (loading) {
+  if (loading && (!projects || projects.length === 0)) {
     return (
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "400px", gap: "16px" }}>
         <div style={{
@@ -5451,7 +5888,7 @@ function ModeratorDashboardView({ projects, loading, onRefresh, onAssignClick, t
             gap: "8px"
           }}
         >
-          <span>🛠️ Ingested proposals</span>
+          <span>️ Ingested proposals</span>
         </button>
         <button
           onClick={() => setActiveTab("deadlines")}
@@ -5470,7 +5907,7 @@ function ModeratorDashboardView({ projects, loading, onRefresh, onAssignClick, t
             gap: "8px"
           }}
         >
-          <span>🚨 Deadlines & Alerts Console</span>
+          <span>Deadlines & Alerts Console</span>
         </button>
       </div>
 
@@ -5479,7 +5916,7 @@ function ModeratorDashboardView({ projects, loading, onRefresh, onAssignClick, t
         <div className="glass-panel" style={{ padding: "24px" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px", flexWrap: "wrap", gap: "12px" }}>
             <div>
-              <h3 style={{ fontSize: "18px", fontWeight: "700", color: "var(--text-main)" }}>🛠️ Project Intake Board</h3>
+              <h3 style={{ fontSize: "18px", fontWeight: "700", color: "var(--text-main)" }}>️ Project Intake Board</h3>
               <p style={{ fontSize: "12.5px", color: "var(--text-muted)", marginTop: "4px" }}>Review budget scope, and instantly automate provisioning to campus Jira spaces.</p>
             </div>
             <button onClick={onRefresh} className="btn-secondary" style={{ padding: "8px 14px", display: "flex", alignItems: "center", gap: "8px" }}>
@@ -5545,7 +5982,8 @@ function ModeratorDashboardView({ projects, loading, onRefresh, onAssignClick, t
                               const isBreached = diffDays < 0;
 
                               return (
-                                <div key={alloc.targetCampusId} style={{
+                                <React.Fragment key={alloc.targetCampusId}>
+                                <div style={{
                                   display: "grid",
                                   gridTemplateColumns: "1.5fr 1fr 1.2fr 1fr 1fr",
                                   alignItems: "center",
@@ -5556,13 +5994,13 @@ function ModeratorDashboardView({ projects, loading, onRefresh, onAssignClick, t
                                   padding: "6px 12px"
                                 }}>
                                   <span style={{ fontWeight: "700", color: "var(--text-main)", fontSize: "12.5px" }}>
-                                    🏫 {alloc.assignedTo}
+                                    {alloc.assignedTo}
                                   </span>
                                   <span style={{ fontFamily: "var(--mono)", fontSize: "12px", color: isProposed ? "var(--text-dim)" : "var(--primary)", fontWeight: "700" }}>
                                     {isProposed ? "Awaiting Decision" : (alloc.assignedKey || "Epic Provisioned")}
                                   </span>
                                   <span style={{ fontSize: "11.5px", color: "var(--text-muted)", display: "flex", alignItems: "center", gap: "4px" }}>
-                                    ⏰ {alloc.proposedDueDate}
+                                    {alloc.proposedDueDate}
                                   </span>
                                   
                                   {/* Status */}
@@ -5584,7 +6022,7 @@ function ModeratorDashboardView({ projects, loading, onRefresh, onAssignClick, t
                                       : (isProposed ? "var(--accent)" : "#2dd4bf"),
                                     textTransform: "uppercase"
                                   }}>
-                                    {isBreached ? "🚨 BREACHED" : (isProposed ? "⏳ PROPOSED" : "⏳ ACTIVE")}
+                                    {isBreached ? "BREACHED" : (isProposed ? "PROPOSED" : "ACTIVE")}
                                   </span>
 
                                   {/* Action / Alert */}
@@ -5608,10 +6046,32 @@ function ModeratorDashboardView({ projects, loading, onRefresh, onAssignClick, t
                                         cursor: "pointer"
                                       }}
                                     >
-                                      Alert Spoke ✉️
+                                      Alert Spoke ️
                                     </button>
                                   </div>
                                 </div>
+                                
+                                {/* Render Phases if available */}
+                                {alloc.phases && alloc.phases.length > 0 && (
+                                  <div style={{ marginLeft: "12px", marginTop: "4px", marginBottom: "12px", display: "flex", flexDirection: "column", gap: "6px", borderLeft: "2px solid rgba(255, 255, 255, 0.05)", paddingLeft: "12px" }}>
+                                    <span style={{ fontSize: "11px", color: "var(--text-dim)", textTransform: "uppercase", letterSpacing: "0.5px", fontWeight: "700" }}>Phases / Tasks:</span>
+                                    {alloc.phases.map(phase => (
+                                      <div key={phase.id || phase.key} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "rgba(0,0,0,0.2)", padding: "6px 10px", borderRadius: "6px", border: "1px solid rgba(255, 255, 255, 0.03)" }}>
+                                        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                                          <span style={{ fontSize: "10px", fontFamily: "var(--mono)", color: "var(--primary)", background: "rgba(45, 212, 191, 0.1)", padding: "2px 4px", borderRadius: "4px" }}>{phase.key}</span>
+                                          <span style={{ fontSize: "12.5px", color: "var(--text-main)", fontWeight: "600" }}>{phase.summary}</span>
+                                        </div>
+                                        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                                          <span style={{ fontSize: "11px", color: "var(--text-dim)" }}>{phase.assignee}</span>
+                                          <span style={{ fontSize: "10px", fontWeight: "700", padding: "2px 6px", borderRadius: "4px", background: phase.status === "Done" ? "rgba(16, 185, 129, 0.1)" : "rgba(255, 255, 255, 0.05)", color: phase.status === "Done" ? "#10b981" : "var(--text-muted)" }}>
+                                            {phase.status}
+                                          </span>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </React.Fragment>
                               );
                             })
                           ) : (
@@ -5659,7 +6119,7 @@ function ModeratorDashboardView({ projects, loading, onRefresh, onAssignClick, t
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "16px" }}>
               <div style={{ maxWidth: "550px" }}>
                 <h3 style={{ fontSize: "17px", fontWeight: "800", color: "var(--text-main)", display: "flex", alignItems: "center", gap: "8px" }}>
-                  <span style={{ color: "#ef4444" }}>🚨</span>
+                  <span style={{ color: "#ef4444" }}></span>
                   <span>Automated Deadline Auditor Scanner</span>
                 </h3>
                 <p style={{ fontSize: "12.5px", color: "var(--text-muted)", marginTop: "6px", lineHeight: "1.5" }}>
@@ -5717,7 +6177,7 @@ function ModeratorDashboardView({ projects, loading, onRefresh, onAssignClick, t
                   lineHeight: "1.6"
                 }}>
                   <div style={{ color: "#9ca3af", borderBottom: "1px solid rgba(255,255,255,0.08)", paddingBottom: "6px", marginBottom: "10px", display: "flex", justifyContent: "space-between" }}>
-                    <span>🖥️ AUDITOR CLI TERMINAL</span>
+                    <span>️ AUDITOR CLI TERMINAL</span>
                     <span>SUCCESS</span>
                   </div>
                   <div>[baseline local time: 2026-05-27] Initiating full FIP portfolio audit...</div>
@@ -5755,12 +6215,12 @@ function MeetingsPortalView({ meetings, loading, onRefresh, spokes, triggerToast
     const proposedProjs = moderatorProjects.filter(p => p.assignedTo === spokeName && p.status === "Proposed");
     
     if (activeProjs.length > 0) {
-      return `🔥 Active: ${activeProjs.map(p => p.company).join(", ")}`;
+      return `Active: ${activeProjs.map(p => p.company).join(", ")}`;
     }
     if (proposedProjs.length > 0) {
-      return `⏳ Proposed: ${proposedProjs.map(p => p.company).join(", ")}`;
+      return `Proposed: ${proposedProjs.map(p => p.company).join(", ")}`;
     }
-    return `💤 Awaiting Projects`;
+    return `Awaiting Projects`;
   };
   const [newTitle, setNewTitle] = useState("");
   const [newCampusId, setNewCampusId] = useState("3");
@@ -5784,7 +6244,7 @@ function MeetingsPortalView({ meetings, loading, onRefresh, spokes, triggerToast
 
     const overlap = meetings.some(m => m.campusId === newCampusId && m.date === newDate && m.time === newTime);
     if (overlap) {
-      triggerToast(`⚠️ Schedule Conflict: There is already a sync scheduled for this campus today at ${newTime}!`, "warning");
+      triggerToast(`️ Schedule Conflict: There is already a sync scheduled for this campus today at ${newTime}!`, "warning");
     }
 
     setIsScheduling(true);
@@ -5828,7 +6288,7 @@ function MeetingsPortalView({ meetings, loading, onRefresh, spokes, triggerToast
     }
   };
 
-  if (loading) {
+  if (loading && (!meetings || meetings.length === 0)) {
     return (
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "400px", gap: "16px" }}>
         <div style={{
@@ -5850,7 +6310,7 @@ function MeetingsPortalView({ meetings, loading, onRefresh, spokes, triggerToast
       <div className="glass-panel" style={{ padding: "24px" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
           <div>
-            <h3 style={{ fontSize: "18px", fontWeight: "700", color: "var(--text-main)" }}>📅 Scheduled FIP Syncs</h3>
+            <h3 style={{ fontSize: "18px", fontWeight: "700", color: "var(--text-main)" }}>Scheduled FIP Syncs</h3>
             <p style={{ fontSize: "12.5px", color: "var(--text-muted)", marginTop: "4px" }}>Active sync schedules and prep reminder trigger panels.</p>
           </div>
           <button onClick={onRefresh} className="btn-secondary" style={{ padding: "8px 14px", display: "flex", alignItems: "center", gap: "8px" }}>
@@ -5885,7 +6345,7 @@ function MeetingsPortalView({ meetings, loading, onRefresh, spokes, triggerToast
                       textTransform: "uppercase",
                       letterSpacing: "0.5px"
                     }}>
-                      🏢 {spokeName}
+                      {spokeName}
                     </span>
                     <h4 style={{ fontSize: "16px", fontWeight: "800", color: "var(--text-main)", marginTop: "8px", marginBottom: "0" }}>
                       {meet.title}
@@ -5905,10 +6365,10 @@ function MeetingsPortalView({ meetings, loading, onRefresh, spokes, triggerToast
                           border: "1px solid rgba(239, 68, 68, 0.2)",
                           color: "#ef4444"
                         }} className="pulse-glow" title="Another meeting is scheduled for this campus at the same time!">
-                          ⚠️ Conflict
+                          ️ Conflict
                         </span>
                       )}
-                      <div style={{ fontSize: "14px", fontWeight: "700", color: "var(--primary)" }}>⏰ {meet.time}</div>
+                      <div style={{ fontSize: "14px", fontWeight: "700", color: "var(--primary)" }}>{meet.time}</div>
                     </div>
                     <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>{meet.date}</span>
                   </div>
@@ -5925,7 +6385,7 @@ function MeetingsPortalView({ meetings, loading, onRefresh, spokes, triggerToast
                     rel="noopener noreferrer"
                     style={{ fontSize: "12px", color: "var(--primary)", textDecoration: "none", fontWeight: "700" }}
                   >
-                    🔗 Join Sync Call (Teams/Zoom)
+                    Join Sync Call (Teams/Zoom)
                   </a>
                   
                   <button
@@ -5942,7 +6402,7 @@ function MeetingsPortalView({ meetings, loading, onRefresh, spokes, triggerToast
                       cursor: "pointer"
                     }}
                   >
-                    {isReminderActive ? "Relaying alerts..." : "📢 Dispatch Prep Reminder"}
+                    {isReminderActive ? "Relaying alerts..." : "Dispatch Prep Reminder"}
                   </button>
                 </div>
               </div>
@@ -5959,7 +6419,7 @@ function MeetingsPortalView({ meetings, loading, onRefresh, spokes, triggerToast
       {/* RIGHT COLUMN: Schedule Form */}
       <div className="glass-panel" style={{ padding: "24px" }}>
         <h3 style={{ fontSize: "18px", fontWeight: "700", color: "var(--text-main)", marginBottom: "6px" }}>
-          ➕ Schedule FIP Campus Sync
+          Schedule FIP Campus Sync
         </h3>
         <p style={{ fontSize: "12.5px", color: "var(--text-muted)", marginBottom: "20px" }}>
           Establish sync channels for review of sprint deliverables.
@@ -5996,7 +6456,7 @@ function MeetingsPortalView({ meetings, loading, onRefresh, spokes, triggerToast
                 const status = getSpokeProjectStatus(s.name);
                 return (
                   <option key={s.id} value={s.id}>
-                    🏢 {s.name} ({s.key}) — [{status}]
+                    {s.name} ({s.key}) — [{status}]
                   </option>
                 );
               })}
@@ -6075,10 +6535,485 @@ function MeetingsPortalView({ meetings, loading, onRefresh, spokes, triggerToast
               cursor: "pointer"
             }}
           >
-            {isScheduling ? "Creating sync..." : "Schedule Sync Meeting 🚀"}
+            {isScheduling ? "Creating sync..." : "Schedule Sync Meeting "}
           </button>
         </form>
       </div>
+
+    </div>
+  );
+}
+
+function CompanySponsorView({ projects, loading, onRefresh, sessionUser, triggerToast }) {
+  const [activeTab, setActiveTab] = useState("portfolio"); // "portfolio" or "submit"
+  
+  // Submit Form States
+  const [formCompany, setFormCompany] = useState(sessionUser?.company || "NVIDIA");
+  const [formTitle, setFormTitle] = useState("");
+  const [formDescription, setFormDescription] = useState("");
+  const [formBudget, setFormBudget] = useState("$25,000");
+  const [formDuration, setFormDuration] = useState("6 Months");
+  const [formLogoUrl, setFormLogoUrl] = useState("");
+  const [formInitialWorkstream, setFormInitialWorkstream] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Filter projects by current logged-in company name context
+  const companyContext = sessionUser?.company || "NVIDIA";
+  const myProjects = projects.filter(p => p.company.toLowerCase() === companyContext.toLowerCase());
+
+  // Calculations for KPI Cards
+  const totalSubmissions = myProjects.length;
+  const approvedSponsorships = myProjects.filter(p => p.allocations && p.allocations.length > 0).length;
+  const doneSponsorships = myProjects.filter(p => {
+    if (!p.allocations || p.allocations.length === 0) return false;
+    return p.allocations.every(alloc => alloc.progressPercent === 100);
+  }).length;
+  
+  const totalFundingValue = myProjects.reduce((sum, p) => {
+    const val = parseInt(p.budget.replace(/[^0-9]/g, '')) || 0;
+    return sum + val;
+  }, 0);
+
+  const handleSubmitProposal = async (e) => {
+    e.preventDefault();
+    if (!formTitle.trim() || !formDescription.trim()) {
+      triggerToast("Please enter a project title and description.", "error");
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      await axios.post("http://localhost:5000/company/projects", {
+        company: formCompany,
+        title: formTitle,
+        description: formDescription,
+        budget: formBudget,
+        duration: formDuration,
+        logoUrl: formLogoUrl,
+        initialWorkstream: formInitialWorkstream
+      });
+      
+      triggerToast("Project Proposal submitted successfully to Central Moderator!");
+      setFormTitle("");
+      setFormDescription("");
+      setFormLogoUrl("");
+      setFormInitialWorkstream("");
+      setActiveTab("portfolio");
+      onRefresh(); // Refresh projects list from server
+    } catch (err) {
+      console.error(err);
+      triggerToast(err.response?.data?.error || "Failed to submit project proposal.", "error");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  if (loading && (!projects || projects.length === 0)) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "400px", gap: "16px" }}>
+        <div style={{
+          width: "48px",
+          height: "48px",
+          border: "4px solid rgba(251, 146, 60, 0.1)",
+          borderTopColor: "var(--accent)",
+          borderRadius: "50%",
+        }} className="pulse-glow"></div>
+        <p style={{ color: "var(--text-muted)", fontSize: "14px" }}>Retrieving active sponsorship contracts...</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="fade-in" style={{ display: "flex", flexDirection: "column", gap: "30px" }}>
+      
+      {/* Portfolio Sponsor KPI Grid */}
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+        gap: "20px"
+      }}>
+        <DashboardCard
+          title="Total Submissions"
+          value={totalSubmissions}
+          subtitle={`Submitted proposals by ${companyContext}`}
+          glow={true}
+        />
+        <DashboardCard
+          title="Campus Placements"
+          value={approvedSponsorships}
+          subtitle="Assigned to Spoke institutions"
+          themeColor="var(--primary)"
+        />
+        <DashboardCard
+          title="Fully Completed"
+          value={doneSponsorships}
+          subtitle="Delivered by student cohorts"
+          themeColor="var(--status-done-text)"
+        />
+        <DashboardCard
+          title="Total Sponsored Funding"
+          value={`$${totalFundingValue.toLocaleString()}`}
+          subtitle="Total committed project funding"
+          themeColor="var(--accent)"
+        />
+      </div>
+
+      {/* Sponsor Tab Switcher */}
+      <div style={{ display: "flex", gap: "12px", borderBottom: "1px solid var(--border-glass)", paddingBottom: "16px" }}>
+        <button
+          onClick={() => setActiveTab("portfolio")}
+          style={{
+            background: activeTab === "portfolio" ? "linear-gradient(135deg, rgba(99, 102, 241, 0.08), rgba(168, 85, 247, 0.08))" : "transparent",
+            border: "1px solid " + (activeTab === "portfolio" ? "var(--primary)" : "var(--border-glass)"),
+            color: activeTab === "portfolio" ? "var(--text-main)" : "var(--text-muted)",
+            padding: "8px 16px",
+            borderRadius: "8px",
+            fontSize: "12.5px",
+            fontWeight: "700",
+            cursor: "pointer",
+            transition: "all 0.3s ease",
+            display: "flex",
+            alignItems: "center",
+            gap: "8px"
+          }}
+        >
+          <span>📋 Active Sponsorships Tracker</span>
+        </button>
+        <button
+          onClick={() => setActiveTab("submit")}
+          style={{
+            background: activeTab === "submit" ? "linear-gradient(135deg, rgba(239, 68, 68, 0.08), rgba(249, 115, 22, 0.08))" : "transparent",
+            border: "1px solid " + (activeTab === "submit" ? "var(--accent)" : "var(--border-glass)"),
+            color: activeTab === "submit" ? "var(--text-main)" : "var(--text-muted)",
+            padding: "8px 16px",
+            borderRadius: "8px",
+            fontSize: "12.5px",
+            fontWeight: "700",
+            cursor: "pointer",
+            transition: "all 0.3s ease",
+            display: "flex",
+            alignItems: "center",
+            gap: "8px"
+          }}
+        >
+          <span>🚀 Submit Corporate Project Proposal</span>
+        </button>
+      </div>
+
+      {activeTab === "portfolio" ? (
+        /* ACTIVE SPONSORSHIPS PORTFOLIO GRID */
+        <div className="glass-panel" style={{ padding: "24px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px", flexWrap: "wrap", gap: "12px" }}>
+            <div>
+              <h3 style={{ fontSize: "18px", fontWeight: "700", color: "var(--text-main)" }}>📋 Corporate Sponsorship Portfolio</h3>
+              <p style={{ fontSize: "12.5px", color: "var(--text-muted)", marginTop: "4px" }}>Live real-time monitoring of campus deliveries, allocated scopes, and student milestones progress.</p>
+            </div>
+            <button onClick={onRefresh} className="btn-secondary" style={{ padding: "8px 14px", display: "flex", alignItems: "center", gap: "8px" }}>
+              <FaSyncAlt size={12} />
+              <span style={{ fontSize: "12px" }}>Synchronize Tracker</span>
+            </button>
+          </div>
+
+          {myProjects.length === 0 ? (
+            <div style={{ padding: "60px 0", textAlign: "center", color: "var(--text-dim)" }}>
+              <Building2 size={48} style={{ opacity: 0.3, marginBottom: "16px" }} />
+              <p style={{ fontSize: "15px", fontWeight: "600" }}>No corporate proposals found for {companyContext}.</p>
+              <p style={{ fontSize: "12.5px", color: "var(--text-muted)", marginTop: "4px" }}>Click on "Submit Corporate Project Proposal" tab to sponsor a new workspace program!</p>
+            </div>
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: "13px" }}>
+                <thead>
+                  <tr style={{ borderBottom: "1.5px solid var(--border-glass)" }}>
+                    <th style={{ padding: "12px 16px", color: "var(--text-muted)", fontWeight: "700", width: "300px" }}>Project Details</th>
+                    <th style={{ padding: "12px 16px", color: "var(--text-muted)", fontWeight: "700", textAlign: "left" }}>Campus Allocations, Faculty Mentors & Sprint Deadlines</th>
+                    <th style={{ padding: "12px 16px", color: "var(--text-muted)", fontWeight: "700", textAlign: "center", width: "150px" }}>Live Project Completion Progress</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {myProjects.map((proj, idx) => {
+                    const activeAllocations = proj.allocations || [];
+                    return (
+                      <tr
+                        key={proj.id}
+                        style={{
+                          borderBottom: "1px solid var(--border-glass)",
+                          background: idx % 2 === 0 ? "rgba(255,255,255,0.01)" : "transparent",
+                          transition: "var(--transition-smooth)"
+                        }}
+                        className="table-row-hover"
+                      >
+                        {/* Project Details */}
+                        <td style={{ padding: "16px", verticalAlign: "top" }}>
+                          <div style={{ display: "flex", alignItems: "flex-start", gap: "12px" }}>
+                            {proj.logoUrl && (
+                              <img
+                                src={proj.logoUrl}
+                                alt={proj.company}
+                                style={{ width: "32px", height: "32px", borderRadius: "8px", objectFit: "contain", border: "1.5px solid var(--border-glass)", background: "white", padding: "2px" }}
+                                onError={(e) => { e.target.style.display = 'none'; }}
+                              />
+                            )}
+                            <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                              <span style={{ fontWeight: "800", color: "var(--primary)", fontSize: "14px" }}>{proj.title}</span>
+                              <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>
+                                Sponsor: <strong>{proj.company}</strong> | Budget: <strong>{proj.budget}</strong> | Duration: <strong>{proj.duration}</strong>
+                              </span>
+                              <p style={{ color: "var(--text-dim)", fontSize: "11.5px", lineHeight: "1.4", margin: "4px 0 0 0", maxWidth: "260px" }}>{proj.description}</p>
+                            </div>
+                          </div>
+                        </td>
+
+                        {/* Campus Allocations, Faculty Mentors & Sprint Deadlines */}
+                        <td style={{ padding: "16px", verticalAlign: "top" }}>
+                          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                            {activeAllocations.length > 0 ? (
+                              activeAllocations.map(alloc => {
+                                const isProposed = alloc.status === "Proposed";
+                                // Calculate days left relative to May 26, 2026
+                                const today = new Date("2026-05-26");
+                                const due = new Date(alloc.proposedDueDate);
+                                const diffTime = due.getTime() - today.getTime();
+                                const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+                                return (
+                                  <div key={alloc.targetCampusId} style={{
+                                    display: "grid",
+                                    gridTemplateColumns: "1.5fr 1.2fr 1fr 1fr",
+                                    alignItems: "center",
+                                    gap: "12px",
+                                    background: "rgba(255, 255, 255, 0.005)",
+                                    border: "1px solid var(--border-glass)",
+                                    borderRadius: "8px",
+                                    padding: "6px 12px"
+                                  }}>
+                                    <span style={{ fontWeight: "700", color: "var(--text-main)", fontSize: "12.5px" }}>
+                                      🏢 {alloc.assignedTo}
+                                    </span>
+                                    <span style={{ fontSize: "12px", color: "var(--text-muted)", fontWeight: "600" }}>
+                                      🎓 {alloc.facultyLead || "Faculty lead Awaiting"}
+                                    </span>
+                                    <span style={{ fontFamily: "var(--mono)", fontSize: "12px", color: isProposed ? "var(--text-dim)" : "var(--primary)", fontWeight: "700" }}>
+                                      🏷️ {isProposed ? "Awaiting Accept" : (alloc.assignedKey || "Jira Active")}
+                                    </span>
+                                    <span style={{
+                                      fontSize: "11px",
+                                      fontWeight: "800",
+                                      color: diffDays < 0 ? "#ef4444" : "var(--text-muted)",
+                                      textAlign: "right"
+                                    }}>
+                                      📅 {alloc.proposedDueDate} ({diffDays < 0 ? "Breached" : `${diffDays} days left`})
+                                    </span>
+                                  </div>
+                                );
+                              })
+                            ) : (
+                              <div style={{ color: "var(--text-dim)", fontSize: "12px", padding: "6px 0" }}>
+                                ⏳ Proposed. Awaiting Central Moderator assignment to active campus spokes.
+                              </div>
+                            )}
+                          </div>
+                        </td>
+
+                        {/* Live Project Completion Progress */}
+                        <td style={{ padding: "16px", verticalAlign: "middle", textAlign: "center" }}>
+                          {activeAllocations.length > 0 ? (
+                            <div style={{ display: "flex", flexDirection: "column", gap: "6px", alignItems: "center" }}>
+                              {activeAllocations.map(alloc => {
+                                const prog = alloc.progressPercent || 0;
+                                return (
+                                  <div key={alloc.targetCampusId} style={{ display: "flex", alignItems: "center", gap: "10px", width: "100%", justifyContent: "center" }}>
+                                    <span style={{ fontSize: "11px", fontWeight: "700", color: "var(--text-muted)", width: "70px", textAlign: "left", textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap" }}>
+                                      {alloc.assignedTo.split(" ")[0]}
+                                    </span>
+                                    <div style={{ width: "80px", height: "6px", background: "var(--border-glass)", borderRadius: "3px", overflow: "hidden", position: "relative" }}>
+                                      <div style={{
+                                        width: `${prog}%`,
+                                        height: "100%",
+                                        background: "linear-gradient(90deg, var(--primary), var(--secondary))",
+                                        borderRadius: "3px",
+                                        boxShadow: "0 0 8px var(--primary-glow)"
+                                      }}></div>
+                                    </div>
+                                    <span style={{
+                                      fontSize: "12px",
+                                      fontWeight: "800",
+                                      color: prog === 100 ? "var(--status-done-text)" : "var(--primary)",
+                                      width: "40px",
+                                      textAlign: "right"
+                                    }}>
+                                      {prog}%
+                                    </span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <span style={{
+                              fontSize: "11px",
+                              fontWeight: "900",
+                              background: "var(--bg-input)",
+                              border: "1px solid var(--border-glass)",
+                              color: "var(--text-dim)",
+                              padding: "4px 8px",
+                              borderRadius: "6px"
+                            }}>
+                              IN REVIEW
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      ) : (
+        /* R&D SPONSORSHIP PROPOSAL INTAKE SUBMISSION CARD */
+        <div className="glass-panel" style={{ padding: "30px", maxWidth: "700px", margin: "0 auto" }}>
+          <h3 style={{ fontSize: "20px", fontWeight: "800", color: "var(--text-main)", marginBottom: "6px", letterSpacing: "-0.5px" }}>
+            🚀 Submit Corporate Sponsorship Contract
+          </h3>
+          <p style={{ fontSize: "13.5px", color: "var(--text-muted)", marginBottom: "25px" }}>
+            Submit an external research and engineering contract. Once received, the Central Moderator will review and delegate it directly to the appropriate campus spoke.
+          </p>
+
+          <form onSubmit={handleSubmitProposal} style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+            <div>
+              <label style={{ display: "block", fontSize: "12px", fontWeight: "800", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "6px" }}>
+                Sponsor Organization Name *
+              </label>
+              <input
+                type="text"
+                required
+                disabled={true}
+                className="form-input"
+                value={formCompany}
+                style={{ width: "100%", padding: "11px 14px", fontSize: "14px", opacity: 0.75, cursor: "not-allowed" }}
+              />
+            </div>
+
+            <div>
+              <label style={{ display: "block", fontSize: "12px", fontWeight: "800", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "6px" }}>
+                Corporate Project Proposal Title *
+              </label>
+              <input
+                type="text"
+                required
+                className="form-input"
+                placeholder="e.g. LLM-Powered Legal Document Analyzer"
+                value={formTitle}
+                onChange={(e) => setFormTitle(e.target.value)}
+                style={{ width: "100%", padding: "11px 14px", fontSize: "14px" }}
+              />
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
+              <div>
+                <label style={{ display: "block", fontSize: "12px", fontWeight: "800", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "6px" }}>
+                  Corporate Sponsorship Budget *
+                </label>
+                <input
+                  type="text"
+                  required
+                  className="form-input"
+                  placeholder="e.g. $30,000"
+                  value={formBudget}
+                  onChange={(e) => setFormBudget(e.target.value)}
+                  style={{ width: "100%", padding: "11px 14px", fontSize: "14px" }}
+                />
+              </div>
+              <div>
+                <label style={{ display: "block", fontSize: "12px", fontWeight: "800", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "6px" }}>
+                  Expected Delivery Duration *
+                </label>
+                <input
+                  type="text"
+                  required
+                  className="form-input"
+                  placeholder="e.g. 6 Months"
+                  value={formDuration}
+                  onChange={(e) => setFormDuration(e.target.value)}
+                  style={{ width: "100%", padding: "11px 14px", fontSize: "14px" }}
+                />
+              </div>
+            </div>
+
+            <div>
+              <label style={{ display: "block", fontSize: "12px", fontWeight: "800", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "6px" }}>
+                Company Brand Logo URL (Optional)
+              </label>
+              <input
+                type="url"
+                className="form-input"
+                placeholder="e.g. https://logo.clearbit.com/nvidia.com"
+                value={formLogoUrl}
+                onChange={(e) => setFormLogoUrl(e.target.value)}
+                style={{ width: "100%", padding: "11px 14px", fontSize: "14px" }}
+              />
+            </div>
+
+            <div>
+              <label style={{ display: "block", fontSize: "12px", fontWeight: "800", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "6px" }}>
+                Initial Workstream / Phase 1 Deliverable *
+              </label>
+              <input
+                type="text"
+                required
+                className="form-input"
+                placeholder="e.g. Phase 1: Setup Jetson Orin Nano environment and calibrate depth cameras"
+                value={formInitialWorkstream}
+                onChange={(e) => setFormInitialWorkstream(e.target.value)}
+                style={{ width: "100%", padding: "11px 14px", fontSize: "14px" }}
+              />
+            </div>
+
+            <div>
+              <label style={{ display: "block", fontSize: "12px", fontWeight: "800", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "6px" }}>
+                Detailed Project Description & Research Deliverables *
+              </label>
+              <textarea
+                required
+                rows={5}
+                className="form-input"
+                placeholder="Provide a comprehensive summary of key engineering milestones, hardware required, and standard delivery outcomes..."
+                value={formDescription}
+                onChange={(e) => setFormDescription(e.target.value)}
+                style={{ width: "100%", padding: "11px 14px", fontSize: "14px", resize: "vertical" }}
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={isSubmitting}
+              className="btn-primary"
+              style={{
+                padding: "13px 20px",
+                marginTop: "8px",
+                fontWeight: "800",
+                fontSize: "14.5px",
+                background: "linear-gradient(135deg, var(--primary), var(--secondary))",
+                boxShadow: "0 6px 15px rgba(99, 102, 241, 0.2)",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: "8px"
+              }}
+            >
+              {isSubmitting ? (
+                <span>Submitting Proposal...</span>
+              ) : (
+                <>
+                  <span>Submit Proposal Contract</span>
+                </>
+              )}
+            </button>
+          </form>
+        </div>
+      )}
 
     </div>
   );

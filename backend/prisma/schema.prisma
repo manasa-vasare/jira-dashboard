@@ -1,0 +1,89 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String
+  name      String
+  role             String
+  campusId         String?
+  campus           Campus?  @relation(fields: [campusId], references: [id])
+  resetToken       String?
+  resetTokenExpiry DateTime?
+  createdAt        DateTime @default(now())
+}
+
+model Project {
+  id              String       @id @default(uuid())
+  company         String
+  logoUrl         String
+  title           String
+  description     String
+  budget          String
+  duration        String
+  status          String       @default("Proposed")
+  assignedTo      String?
+  targetCampusId  String?
+  proposedDueDate String?
+  assignedKey     String?
+  dateAdded       String
+  initialWorkstream String?
+  allocations     Allocation[]
+}
+
+model Allocation {
+  id              String   @id @default(uuid())
+  targetCampusId  String
+  status          String
+  assignedTo      String
+  proposedDueDate String
+  jiraEpicKey     String?
+  
+  projectId       String
+  project         Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+model Campus {
+  id           String       @id @default(uuid())
+  name         String
+  jiraBoardKey String?
+  isActive     Boolean      @default(true)
+  joinedDate   DateTime     @default(now())
+  users        User[]
+  meetings     Meeting[]
+}
+
+model Company {
+  id           String    @id @default(uuid())
+  name         String    @unique
+  logoUrl      String?
+  industry     String?
+  contactEmail String?
+}
+
+model Meeting {
+  id          String   @id @default(uuid())
+  title       String
+  agenda      String?
+  scheduledAt DateTime
+  meetingLink String?
+  status      String   @default("Scheduled")
+  campusId    String
+  campus      Campus   @relation(fields: [campusId], references: [id], onDelete: Cascade)
+}
+
+model AuditLog {
+  id              String   @id @default(uuid())
+  moderatorId     String
+  actionPerformed String
+  targetEntity    String?
+  details         String?
+  timestamp       DateTime @default(now())
+}

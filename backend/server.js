@@ -9,6 +9,12 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+const { PrismaClient } = require("@prisma/client");
+const prisma = new PrismaClient();
+
+const authRoutes = require("./routes/auth");
+app.use("/api/auth", authRoutes);
+
 const auth = Buffer.from(
   `${process.env.JIRA_EMAIL}:${process.env.JIRA_API_TOKEN}`
 ).toString("base64");
@@ -36,6 +42,19 @@ let mockTasksStore = {
   "102": [],
   "103": []
 };
+
+// Helper to find a mock task by key across all dynamic boards in mockTasksStore
+function findMockTask(key) {
+  for (const boardId of Object.keys(mockTasksStore)) {
+    const issues = mockTasksStore[boardId] || [];
+    const task = issues.find(t => t.key === key);
+    if (task) {
+      return { task, boardId, issues };
+    }
+  }
+  return null;
+}
+
 
 const CAMPUS_TEAM_MEMBERS = {
   "3": [ // KLE Spoke
@@ -192,7 +211,7 @@ function initMockData() {
   console.log("Mock B2B Epic and task hierarchies successfully pre-populated!");
 }
 
-initMockData();
+// initMockData(); // Disabled: starting with clean spoke data
 
 app.get("/spokes", (req, res) => {
   res.json(Object.values(SPOKES));
@@ -520,27 +539,20 @@ app.put("/tasks/:key", async (req, res) => {
   const { key } = req.params;
   const { summary, description, dueDate, assignee, reporter, priority } = req.body;
 
-  const projectKey = key.split("-")[0];
-  const spoke = Object.values(SPOKES).find(s => s.key === projectKey);
-
-  if (spoke && !spoke.live) {
-    const issues = mockTasksStore[spoke.boardId] || [];
-    const task = issues.find(t => t.key === key);
-    if (task) {
-      if (summary !== undefined) task.fields.summary = summary;
-      if (description !== undefined) task.fields.description = description;
-      if (dueDate !== undefined) task.fields.duedate = dueDate === "" ? null : dueDate;
-      if (priority !== undefined) task.fields.priority = { name: priority };
-      if (assignee !== undefined) {
-        task.fields.assignee = assignee ? MOCK_ASSIGNEES.find(a => a.accountId === assignee) || { accountId: assignee, displayName: "Team Member", avatarUrls: { "48x48": "https://i.pravatar.cc/150" } } : null;
-      }
-      if (reporter !== undefined) {
-        task.fields.reporter = reporter ? MOCK_ASSIGNEES.find(a => a.accountId === reporter) || { accountId: reporter, displayName: "Reporter" } : null;
-      }
-      return res.json({ success: true, message: `Updated mock issue ${key} successfully` });
-    } else {
-      return res.status(404).json({ error: `Mock issue ${key} not found` });
+  const mockData = findMockTask(key);
+  if (mockData) {
+    const { task } = mockData;
+    if (summary !== undefined) task.fields.summary = summary;
+    if (description !== undefined) task.fields.description = description;
+    if (dueDate !== undefined) task.fields.duedate = dueDate === "" ? null : dueDate;
+    if (priority !== undefined) task.fields.priority = { name: priority };
+    if (assignee !== undefined) {
+      task.fields.assignee = assignee ? MOCK_ASSIGNEES.find(a => a.accountId === assignee) || { accountId: assignee, displayName: "Team Member", avatarUrls: { "48x48": "https://i.pravatar.cc/150" } } : null;
     }
+    if (reporter !== undefined) {
+      task.fields.reporter = reporter ? MOCK_ASSIGNEES.find(a => a.accountId === reporter) || { accountId: reporter, displayName: "Reporter" } : null;
+    }
+    return res.json({ success: true, message: `Updated mock issue ${key} successfully` });
   }
 
   const fields = {};
@@ -593,18 +605,11 @@ app.post("/tasks/:key/transition", async (req, res) => {
   const { key } = req.params;
   const { statusName } = req.body;
 
-  const projectKey = key.split("-")[0];
-  const spoke = Object.values(SPOKES).find(s => s.key === projectKey);
-
-  if (spoke && !spoke.live) {
-    const issues = mockTasksStore[spoke.boardId] || [];
-    const task = issues.find(t => t.key === key);
-    if (task) {
-      task.fields.status.name = statusName;
-      return res.json({ success: true, message: `Transitioned mock issue ${key} to ${statusName} successfully.` });
-    } else {
-      return res.status(404).json({ error: `Mock issue ${key} not found` });
-    }
+  const mockData = findMockTask(key);
+  if (mockData) {
+    const { task } = mockData;
+    task.fields.status.name = statusName;
+    return res.json({ success: true, message: `Transitioned mock issue ${key} to ${statusName} successfully.` });
   }
 
   try {
@@ -654,18 +659,14 @@ app.post("/tasks/:key/transition", async (req, res) => {
 app.delete("/tasks/:key", async (req, res) => {
   const { key } = req.params;
 
-  const projectKey = key.split("-")[0];
-  const spoke = Object.values(SPOKES).find(s => s.key === projectKey);
-
-  if (spoke && !spoke.live) {
-    const issues = mockTasksStore[spoke.boardId] || [];
+  const mockData = findMockTask(key);
+  if (mockData) {
+    const { issues, boardId } = mockData;
     const index = issues.findIndex(t => t.key === key);
     if (index !== -1) {
       issues.splice(index, 1);
-      mockTasksStore[spoke.boardId] = issues;
+      mockTasksStore[boardId] = issues;
       return res.json({ success: true, message: `Deleted mock issue ${key} successfully.` });
-    } else {
-      return res.status(404).json({ error: `Mock issue ${key} not found` });
     }
   }
 
@@ -835,18 +836,11 @@ app.put("/tasks/:key/flag", async (req, res) => {
   const { key } = req.params;
   const { flagged } = req.body;
 
-  const projectKey = key.split("-")[0];
-  const spoke = Object.values(SPOKES).find(s => s.key === projectKey);
-
-  if (spoke && !spoke.live) {
-    const issues = mockTasksStore[spoke.boardId] || [];
-    const task = issues.find(t => t.key === key);
-    if (task) {
-      task.fields.customfield_10021 = flagged ? [{ value: "Impediment" }] : null;
-      return res.json({ success: true, message: `Successfully updated flag for mock issue ${key}` });
-    } else {
-      return res.status(404).json({ error: `Mock issue ${key} not found` });
-    }
+  const mockData = findMockTask(key);
+  if (mockData) {
+    const { task } = mockData;
+    task.fields.customfield_10021 = flagged ? [{ value: "Impediment" }] : null;
+    return res.json({ success: true, message: `Successfully updated flag for mock issue ${key}` });
   }
 
   const fields = {
@@ -878,31 +872,24 @@ app.post("/tasks/:key/worklog", async (req, res) => {
   const { key } = req.params;
   const { timeSpent, comment } = req.body;
 
-  const projectKey = key.split("-")[0];
-  const spoke = Object.values(SPOKES).find(s => s.key === projectKey);
+  const mockData = findMockTask(key);
+  if (mockData) {
+    const { task } = mockData;
+    if (!task.fields.worklogs) task.fields.worklogs = [];
+    task.fields.worklogs.push({
+      id: `mock-wl-${Date.now()}`,
+      timeSpent,
+      comment: comment || "Logged spent hours via ApniLeap Agile Dashboard",
+      created: new Date().toISOString(),
+      author: MOCK_ASSIGNEES[0]
+    });
 
-  if (spoke && !spoke.live) {
-    const issues = mockTasksStore[spoke.boardId] || [];
-    const task = issues.find(t => t.key === key);
-    if (task) {
-      if (!task.fields.worklogs) task.fields.worklogs = [];
-      task.fields.worklogs.push({
-        id: `mock-wl-${Date.now()}`,
-        timeSpent,
-        comment: comment || "Logged spent hours via ApniLeap Agile Dashboard",
-        created: new Date().toISOString(),
-        author: MOCK_ASSIGNEES[0]
-      });
-
-      if (!task.fields.timetracking) {
-        task.fields.timetracking = { timeSpentSeconds: 0 };
-      }
-      task.fields.timetracking.timeSpent = timeSpent;
-      task.fields.timetracking.timeSpentSeconds = (task.fields.timetracking.timeSpentSeconds || 0) + 7200;
-      return res.json({ success: true, message: `Successfully logged ${timeSpent} to mock issue ${key}` });
-    } else {
-      return res.status(404).json({ error: `Mock issue ${key} not found` });
+    if (!task.fields.timetracking) {
+      task.fields.timetracking = { timeSpentSeconds: 0 };
     }
+    task.fields.timetracking.timeSpent = timeSpent;
+    task.fields.timetracking.timeSpentSeconds = (task.fields.timetracking.timeSpentSeconds || 0) + 7200;
+    return res.json({ success: true, message: `Successfully logged ${timeSpent} to mock issue ${key}` });
   }
 
   try {
@@ -931,12 +918,9 @@ app.post("/tasks/:key/worklog", async (req, res) => {
 app.get("/tasks/:key/worklog", async (req, res) => {
   const { key } = req.params;
 
-  const projectKey = key.split("-")[0];
-  const spoke = Object.values(SPOKES).find(s => s.key === projectKey);
-
-  if (spoke && !spoke.live) {
-    const issues = mockTasksStore[spoke.boardId] || [];
-    const task = issues.find(t => t.key === key);
+  const mockData = findMockTask(key);
+  if (mockData) {
+    const { task } = mockData;
     return res.json(task ? (task.fields.worklogs || []) : []);
   }
 
@@ -962,18 +946,16 @@ app.post("/tasks/:key/subtask", async (req, res) => {
   const { key } = req.params;
   const { summary, assigneeId, parentIssueType } = req.body;
 
-  const projectKey = key.split("-")[0];
-  const spoke = Object.values(SPOKES).find(s => s.key === projectKey);
-
-  if (spoke && !spoke.live) {
-    const issues = mockTasksStore[spoke.boardId] || [];
-    const parentTask = issues.find(t => t.key === key);
-    if (parentTask) {
+  const mockData = findMockTask(key);
+  if (mockData) {
+    const { task: parentTask, issues, boardId } = mockData;
+    const spoke = SPOKES[boardId];
+    if (parentTask && spoke) {
       const isEpic = parentIssueType && parentIssueType.toLowerCase() === "epic";
       const issueTypeName = isEpic ? "Task" : "Sub-task";
       
       const newIndex = issues.length + 1;
-      const newKey = `${projectKey}-${newIndex}`;
+      const newKey = `${spoke.key}-${newIndex}`;
       const newId = `${spoke.boardId}-task-${newIndex}`;
 
       const newChild = {
@@ -1100,18 +1082,11 @@ app.put("/tasks/:key/labels", async (req, res) => {
   const { key } = req.params;
   const { labels } = req.body;
 
-  const projectKey = key.split("-")[0];
-  const spoke = Object.values(SPOKES).find(s => s.key === projectKey);
-
-  if (spoke && !spoke.live) {
-    const issues = mockTasksStore[spoke.boardId] || [];
-    const task = issues.find(t => t.key === key);
-    if (task) {
-      task.fields.labels = labels;
-      return res.json({ success: true, message: `Successfully updated labels for mock issue ${key}` });
-    } else {
-      return res.status(404).json({ error: `Mock issue ${key} not found` });
-    }
+  const mockData = findMockTask(key);
+  if (mockData) {
+    const { task } = mockData;
+    task.fields.labels = labels;
+    return res.json({ success: true, message: `Successfully updated labels for mock issue ${key}` });
   }
 
   try {
@@ -1337,11 +1312,15 @@ app.get("/hub/metrics", async (req, res) => {
     });
 
     // 4. Calculate milestone progress for B2B Corporate Projects across all spokes
-    hubData.b2bProjects = companyProjectsIntake.map(proj => {
+    const dbProjects = await prisma.project.findMany({
+      include: { allocations: true }
+    });
+
+    hubData.b2bProjects = dbProjects.map(proj => {
       const enrichedAllocations = (proj.allocations || []).map(alloc => {
         const boardId = alloc.targetCampusId;
         const issues = allCampusIssues[boardId] || [];
-        const epicKey = alloc.assignedKey;
+        const epicKey = alloc.jiraEpicKey;
 
         let totalTasks = 0;
         let doneTasks = 0;
@@ -1363,7 +1342,12 @@ app.get("/hub/metrics", async (req, res) => {
         });
 
         return {
-          ...alloc,
+          id: alloc.id,
+          targetCampusId: alloc.targetCampusId,
+          assignedTo: alloc.assignedTo,
+          status: alloc.status,
+          proposedDueDate: alloc.proposedDueDate,
+          assignedKey: alloc.jiraEpicKey,
           totalTasks,
           doneTasks,
           progressPercent: totalTasks > 0 ? Math.round((doneTasks / totalTasks) * 100) : 0
@@ -1371,7 +1355,20 @@ app.get("/hub/metrics", async (req, res) => {
       });
 
       return {
-        ...proj,
+        id: proj.id,
+        company: proj.company,
+        logoUrl: proj.logoUrl,
+        title: proj.title,
+        description: proj.description,
+        budget: proj.budget,
+        duration: proj.duration,
+        status: proj.status,
+        assignedTo: proj.assignedTo,
+        targetCampusId: proj.targetCampusId,
+        proposedDueDate: proj.proposedDueDate,
+        assignedKey: proj.assignedKey,
+        dateAdded: proj.dateAdded,
+        initialWorkstream: proj.initialWorkstream,
         allocations: enrichedAllocations
       };
     });
@@ -1387,57 +1384,42 @@ app.get("/hub/metrics", async (req, res) => {
 // B2B MODERATOR PORTAL DATABASE & ENDPOINTS
 // ==========================================
 
-// In-memory Database for B2B Company Projects Intake
-let companyProjectsIntake = [
-  {
-    id: "proj-1",
-    company: "NVIDIA",
-    logoUrl: "https://logo.clearbit.com/nvidia.com?size=80",
-    title: "Edge AI Smart Agriculture System",
-    description: "Build an AI-based system using Jetson Nano for precision agriculture monitoring, soil health inspection, and pest detection on crops.",
-    budget: "$25,000",
-    duration: "6 Months",
-    status: "Proposed",
-    assignedTo: null,
-    targetCampusId: null,
-    proposedDueDate: null,
-    assignedKey: null,
-    dateAdded: "2026-05-20",
-    allocations: []
-  },
-  {
-    id: "proj-2",
-    company: "Intel",
-    logoUrl: "https://logo.clearbit.com/intel.com?size=80",
-    title: "Automotive VLSI Controller Chip",
-    description: "Design and verify a micro-controller unit (MCU) for dashboard telemetry and advanced sensor fusion in electric vehicles.",
-    budget: "$40,000",
-    duration: "9 Months",
-    status: "Proposed",
-    assignedTo: null,
-    targetCampusId: null,
-    proposedDueDate: null,
-    assignedKey: null,
-    dateAdded: "2026-05-24",
-    allocations: []
-  },
-  {
-    id: "proj-3",
-    company: "Google",
-    logoUrl: "https://logo.clearbit.com/google.com?size=80",
-    title: "Cloud-Native Health Tracking API",
-    description: "Develop a secure, high-throughput FHIR-compliant API for sharing electronic medical records seamlessly between clinics and hospitals.",
-    budget: "$15,000",
-    duration: "4 Months",
-    status: "Proposed",
-    assignedTo: null,
-    targetCampusId: null,
-    proposedDueDate: null,
-    assignedKey: null,
-    dateAdded: "2026-05-26",
-    allocations: []
+// B2B Project Intake uses the PostgreSQL database via Prisma (schema.prisma).
+// The static companyProjectsIntake array has been fully migrated to Postgres!
+
+// POST: Submit a new B2B project proposal from a corporate company partner
+app.post("/company/projects", async (req, res) => {
+  const { company, logoUrl, title, description, budget, duration, initialWorkstream } = req.body;
+  if (!company || !title || !description) {
+    return res.status(400).json({ error: "Company name, project title, and description are required." });
   }
-];
+
+  try {
+    const project = await prisma.project.create({
+      data: {
+        company: company.trim(),
+        logoUrl: logoUrl || `https://logo.clearbit.com/${company.toLowerCase().trim().replace(/\s+/g, '')}.com?size=80`,
+        title: title.trim(),
+        description: description.trim(),
+        budget: budget || "$20,000",
+        duration: duration || "6 Months",
+        status: "Proposed",
+        assignedTo: null,
+        targetCampusId: null,
+        proposedDueDate: null,
+        assignedKey: null,
+        dateAdded: new Date().toISOString().split("T")[0],
+        initialWorkstream: initialWorkstream ? initialWorkstream.trim() : "Phase 1: Kickoff & Requirements Analysis"
+      }
+    });
+
+    console.log(`New PostgreSQL B2B proposal created: [${company}] ${title}`);
+    res.json({ success: true, project });
+  } catch (error) {
+    console.error("Failed to create project proposal in DB:", error);
+    res.status(500).json({ error: "Failed to submit project proposal" });
+  }
+});
 
 // GET: Load incoming company projects with live milestone progress calculated for each allocation
 app.get("/moderator/projects", async (req, res) => {
@@ -1480,135 +1462,182 @@ app.get("/moderator/projects", async (req, res) => {
       }
     }
 
-    const projectsWithProgress = companyProjectsIntake.map(proj => {
-      if (proj.allocations && proj.allocations.length > 0) {
-        const enrichedAllocations = proj.allocations.map(alloc => {
-          const boardId = alloc.targetCampusId;
-          const issues = allCampusIssues[boardId] || [];
-          const epicKey = alloc.assignedKey;
+    const dbProjects = await prisma.project.findMany({
+      include: { allocations: true }
+    });
 
-          let totalTasks = 0;
-          let doneTasks = 0;
+    const projectsWithProgress = dbProjects.map(proj => {
+      const enrichedAllocations = (proj.allocations || []).map(alloc => {
+        const boardId = alloc.targetCampusId;
+        const issues = allCampusIssues[boardId] || [];
+        const epicKey = alloc.jiraEpicKey;
 
-          issues.forEach(issue => {
-            const issueType = issue.fields?.issuetype?.name || issue.fields?.issueType || "Task";
-            if (issueType === "Epic") return;
+        let totalTasks = 0;
+        let doneTasks = 0;
+        let phases = [];
 
-            const parentKey = issue.fields?.parent?.key || issue.parent?.key;
-            const parentSummary = issue.fields?.parent?.fields?.summary || issue.fields?.parent?.summary || issue.parent?.fields?.summary || issue.parent?.summary;
-            const expectedSummary = `[${proj.company}] ${proj.title}`;
+        issues.forEach(issue => {
+          const issueType = issue.fields?.issuetype?.name || issue.fields?.issueType || "Task";
+          if (issueType === "Epic") return;
 
-            const isChild = (epicKey && parentKey === epicKey) || (parentSummary && parentSummary === expectedSummary);
-            if (isChild) {
-              totalTasks++;
-              const status = issue.fields?.status?.name || issue.fields?.status || "Backlog";
-              if (status === "Done") doneTasks++;
-            }
-          });
+          const parentKey = issue.fields?.parent?.key || issue.parent?.key;
+          const parentSummary = issue.fields?.parent?.fields?.summary || issue.fields?.parent?.summary || issue.parent?.fields?.summary || issue.parent?.summary;
+          const expectedSummary = `[${proj.company}] ${proj.title}`;
 
-          return {
-            ...alloc,
-            totalTasks,
-            doneTasks,
-            progressPercent: totalTasks > 0 ? Math.round((doneTasks / totalTasks) * 100) : 0
-          };
+          const isChild = (epicKey && parentKey === epicKey) || (parentSummary && parentSummary === expectedSummary);
+          if (isChild) {
+            totalTasks++;
+            const status = issue.fields?.status?.name || issue.fields?.status || "Backlog";
+            if (status === "Done") doneTasks++;
+            
+            phases.push({
+              id: issue.id,
+              key: issue.key,
+              summary: issue.fields?.summary || "No Summary",
+              status: status,
+              assignee: issue.fields?.assignee?.displayName || "Unassigned"
+            });
+          }
         });
 
         return {
-          ...proj,
-          allocations: enrichedAllocations
+          id: alloc.id,
+          targetCampusId: alloc.targetCampusId,
+          assignedTo: alloc.assignedTo,
+          status: alloc.status,
+          proposedDueDate: alloc.proposedDueDate,
+          assignedKey: alloc.jiraEpicKey,
+          totalTasks,
+          doneTasks,
+          progressPercent: totalTasks > 0 ? Math.round((doneTasks / totalTasks) * 100) : 0,
+          phases
         };
-      }
-      return proj;
+      });
+
+      return {
+        id: proj.id,
+        company: proj.company,
+        logoUrl: proj.logoUrl,
+        title: proj.title,
+        description: proj.description,
+        budget: proj.budget,
+        duration: proj.duration,
+        status: proj.status,
+        assignedTo: proj.assignedTo,
+        targetCampusId: proj.targetCampusId,
+        proposedDueDate: proj.proposedDueDate,
+        assignedKey: proj.assignedKey,
+        dateAdded: proj.dateAdded,
+        initialWorkstream: proj.initialWorkstream,
+        allocations: enrichedAllocations
+      };
     });
 
     res.json(projectsWithProgress);
   } catch (error) {
     console.error("Moderator Projects Load Error:", error);
-    res.json(companyProjectsIntake);
+    res.json([]);
   }
 });
 
 // POST: Propose a company project to a campus spoke (Awaiting acceptance)
 app.post("/moderator/assign", async (req, res) => {
   const { projectId, targetBoardId, dueDate } = req.body;
-  const project = companyProjectsIntake.find(p => p.id === projectId);
-  if (!project) {
-    return res.status(404).json({ error: "Company project not found" });
+  
+  try {
+    const project = await prisma.project.findUnique({
+      where: { id: projectId },
+      include: { allocations: true }
+    });
+    if (!project) {
+      return res.status(404).json({ error: "Company project not found" });
+    }
+    const spoke = SPOKES[targetBoardId];
+    if (!spoke) {
+      return res.status(400).json({ error: "Invalid target campus spoke selected" });
+    }
+
+    // Check if already assigned to this campus
+    let allocation = project.allocations.find(a => a.targetCampusId === targetBoardId);
+    if (allocation) {
+      return res.status(400).json({ error: "This project has already been allocated or proposed to this campus spoke." });
+    }
+
+    const proposedDueDate = dueDate || new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+
+    // Create database allocation
+    await prisma.allocation.create({
+      data: {
+        projectId: project.id,
+        targetCampusId: targetBoardId,
+        assignedTo: spoke.name,
+        status: "Proposed",
+        proposedDueDate: proposedDueDate,
+        jiraEpicKey: null
+      }
+    });
+
+    // Update parent project root fields for backwards compatibility
+    const updatedProject = await prisma.project.update({
+      where: { id: project.id },
+      data: {
+        status: "Proposed",
+        assignedTo: spoke.name,
+        targetCampusId: targetBoardId,
+        proposedDueDate: proposedDueDate,
+        assignedKey: null
+      }
+    });
+
+    console.log(`Project ${project.title} successfully proposed to ${spoke.name} in PostgreSQL.`);
+
+    res.json({
+      success: true,
+      message: `Successfully proposed project to ${spoke.name}! Awaiting coordinator acceptance.`,
+      assignedTo: spoke.name,
+      status: updatedProject.status
+    });
+  } catch (error) {
+    console.error("Moderator Assignment Error:", error);
+    res.status(500).json({ error: "Failed to propose project assignment" });
   }
-  const spoke = SPOKES[targetBoardId];
-  if (!spoke) {
-    return res.status(400).json({ error: "Invalid target campus spoke selected" });
-  }
-
-  if (!project.allocations) {
-    project.allocations = [];
-  }
-
-  // Check if already assigned to this campus
-  let allocation = project.allocations.find(a => a.targetCampusId === targetBoardId);
-  if (allocation) {
-    return res.status(400).json({ error: "This project has already been allocated or proposed to this campus spoke." });
-  }
-
-  const proposedDueDate = dueDate || new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
-
-  project.allocations.push({
-    targetCampusId: targetBoardId,
-    assignedTo: spoke.name,
-    status: "Proposed",
-    proposedDueDate: proposedDueDate,
-    assignedKey: null
-  });
-
-  // Sync to root fields for backwards compatibility
-  project.status = "Proposed";
-  project.assignedTo = spoke.name;
-  project.targetCampusId = targetBoardId;
-  project.proposedDueDate = proposedDueDate;
-  project.assignedKey = null;
-
-  console.log(`Project ${project.title} successfully proposed to ${spoke.name}. Awaiting coordinator response.`);
-
-  res.json({
-    success: true,
-    message: `Successfully proposed project to ${spoke.name}! Awaiting coordinator acceptance.`,
-    assignedTo: spoke.name,
-    status: project.status
-  });
 });
 
 // POST: Spoke coordinator accepts proposed project (Triggers JIRA Provisioning)
 app.post("/spoke/project/:projectId/accept", async (req, res) => {
   const { projectId } = req.params;
   const { targetBoardId } = req.body;
-  const project = companyProjectsIntake.find(p => p.id === projectId);
-  if (!project) {
-    return res.status(404).json({ error: "Proposed project not found" });
-  }
-
-  const boardId = targetBoardId || project.targetCampusId;
-  const spoke = SPOKES[boardId];
-  if (!spoke) {
-    return res.status(400).json({ error: "Invalid target campus spoke resolved" });
-  }
-
-  if (!project.allocations) project.allocations = [];
-  let allocation = project.allocations.find(a => a.targetCampusId === boardId);
-  if (!allocation) {
-    allocation = {
-      targetCampusId: boardId,
-      assignedTo: spoke.name,
-      status: "Proposed",
-      proposedDueDate: project.proposedDueDate || new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
-      assignedKey: null
-    };
-    project.allocations.push(allocation);
-  }
-
-  const dueDate = allocation.proposedDueDate;
-
+  
   try {
+    const project = await prisma.project.findUnique({
+      where: { id: projectId },
+      include: { allocations: true }
+    });
+    if (!project) {
+      return res.status(404).json({ error: "Proposed project not found" });
+    }
+
+    const boardId = targetBoardId || project.targetCampusId;
+    const spoke = SPOKES[boardId];
+    if (!spoke) {
+      return res.status(400).json({ error: "Invalid target campus spoke resolved" });
+    }
+
+    let allocation = project.allocations.find(a => a.targetCampusId === boardId);
+    if (!allocation) {
+      allocation = await prisma.allocation.create({
+        data: {
+          projectId: project.id,
+          targetCampusId: boardId,
+          assignedTo: spoke.name,
+          status: "Proposed",
+          proposedDueDate: project.proposedDueDate || new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+          jiraEpicKey: null
+        }
+      });
+    }
+
+    const dueDate = allocation.proposedDueDate;
     let createdEpicKey = "";
     const summary = `[${project.company}] ${project.title}`;
     const descriptionText = `${project.description}\n\nSponsor: ${project.company}\nBudget: ${project.budget}\nDuration: ${project.duration}`;
@@ -1672,40 +1701,38 @@ app.post("/spoke/project/:projectId/accept", async (req, res) => {
         createdEpicKey = epicRes.data.key;
         console.log(`Epic Created successfully: ${createdEpicKey}`);
 
-        for (let idx = 0; idx < standardTasks.length; idx++) {
-          const taskSummary = standardTasks[idx];
-          const taskBody = {
-            fields: {
-              project: { key: spoke.key },
-              summary: taskSummary,
-              description: {
-                type: "doc",
-                version: 1,
-                content: [
-                  {
-                    type: "paragraph",
-                    content: [{ type: "text", text: `Automated child task created under Epic ${createdEpicKey}.` }]
-                  }
-                ]
-              },
-              duedate: taskDueDates[idx],
-              issuetype: { name: "Task" },
-              parent: { key: createdEpicKey },
-              labels: LIVE_BOARD_IDS.includes(spoke.boardId) ? [CAMPUS_LABELS[targetBoardId] || "kle-spoke"] : ["task"]
-            }
-          };
+        const taskSummary = project.initialWorkstream || "Phase 1: Kickoff & Requirements Analysis";
+        const taskBody = {
+          fields: {
+            project: { key: spoke.key },
+            summary: taskSummary,
+            description: {
+              type: "doc",
+              version: 1,
+              content: [
+                {
+                  type: "paragraph",
+                  content: [{ type: "text", text: `Initial workstream deliverable created under Epic ${createdEpicKey}.` }]
+                }
+              ]
+            },
+            duedate: finalDateStr,
+            issuetype: { name: "Task" },
+            parent: { key: createdEpicKey },
+            labels: LIVE_BOARD_IDS.includes(spoke.boardId) ? [CAMPUS_LABELS[targetBoardId] || "kle-spoke"] : ["task"]
+          }
+        };
 
-          await axios.post(
-            `${process.env.JIRA_DOMAIN}/rest/api/3/issue`,
-            taskBody,
-            {
-              headers: {
-                Authorization: `Basic ${auth}`,
-                "Content-Type": "application/json"
-              }
+        await axios.post(
+          `${process.env.JIRA_DOMAIN}/rest/api/3/issue`,
+          taskBody,
+          {
+            headers: {
+              Authorization: `Basic ${auth}`,
+              "Content-Type": "application/json"
             }
-          );
-        }
+          }
+        );
       } else {
         throw new Error("Failed to retrieve created Epic key from Jira response");
       }
@@ -1741,46 +1768,54 @@ app.post("/spoke/project/:projectId/accept", async (req, res) => {
 
       spokeTasks.push(newEpic);
 
-      standardTasks.forEach((taskSummary, idx) => {
-        const childKey = `${spoke.key}-${epicIndex}-${idx + 1}`;
-        const newChild = {
-          id: `mock-${targetBoardId}-child-${Date.now()}-${idx}`,
-          key: childKey,
-          fields: {
-            summary: taskSummary,
-            description: `Automated child task created under Epic ${createdEpicKey} representing company project assigned to ${spoke.name}.`,
-            status: { name: "Backlog" },
-            priority: { name: "Medium" },
-            issuetype: { name: "Task" },
-            created: new Date().toISOString(),
-            dueDate: taskDueDates[idx],
-            flagged: false,
-            timetracking: { timeSpentSeconds: 0, originalEstimateSeconds: 36000, remainingEstimateSeconds: 36000 },
-            subtasks: [],
-            labels: ["B2B-Task"],
-            parent: {
-              id: newEpic.id,
-              key: createdEpicKey,
-              summary: summary,
-              issueType: "Epic"
-            }
+      // Create only the single initial workstream task
+      const initialTaskSummary = project.initialWorkstream || "Phase 1: Kickoff & Requirements Analysis";
+      const childKey = `${spoke.key}-${epicIndex}-1`;
+      const newChild = {
+        id: `mock-${targetBoardId}-child-${Date.now()}-1`,
+        key: childKey,
+        fields: {
+          summary: initialTaskSummary,
+          description: `Initial workstream deliverable created under Epic ${createdEpicKey} representing company project assigned to ${spoke.name}.`,
+          status: { name: "Backlog" },
+          priority: { name: "Medium" },
+          issuetype: { name: "Task" },
+          created: new Date().toISOString(),
+          dueDate: finalDateStr,
+          flagged: false,
+          timetracking: { timeSpentSeconds: 0, originalEstimateSeconds: 36000, remainingEstimateSeconds: 36000 },
+          subtasks: [],
+          labels: ["B2B-Task"],
+          parent: {
+            id: newEpic.id,
+            key: createdEpicKey,
+            summary: summary,
+            issueType: "Epic"
           }
-        };
-        spokeTasks.push(newChild);
-      });
+        }
+      };
+      spokeTasks.push(newChild);
     }
 
-    // Update specific allocation status to Active
-    if (allocation) {
-      allocation.status = "Active";
-      allocation.assignedKey = createdEpicKey;
-    }
+    // Update specific allocation status to Active in PostgreSQL
+    await prisma.allocation.update({
+      where: { id: allocation.id },
+      data: {
+        status: "Active",
+        jiraEpicKey: createdEpicKey
+      }
+    });
 
-    // Update root fields for fallback compatibility
-    project.status = "Active";
-    project.assignedTo = spoke.name;
-    project.targetCampusId = boardId;
-    project.assignedKey = createdEpicKey;
+    // Update parent project root fields for fallback compatibility
+    await prisma.project.update({
+      where: { id: project.id },
+      data: {
+        status: "Active",
+        assignedTo: spoke.name,
+        targetCampusId: boardId,
+        assignedKey: createdEpicKey
+      }
+    });
 
     res.json({
       success: true,
@@ -1794,47 +1829,120 @@ app.post("/spoke/project/:projectId/accept", async (req, res) => {
   }
 });
 
-app.post("/spoke/project/:projectId/decline", (req, res) => {
+// POST: Spoke coordinator declines proposed project proposal
+app.post("/spoke/project/:projectId/decline", async (req, res) => {
   const { projectId } = req.params;
   const { targetBoardId } = req.body;
-  const project = companyProjectsIntake.find(p => p.id === projectId);
-  if (!project) {
-    return res.status(404).json({ error: "Proposed project not found" });
+
+  try {
+    const project = await prisma.project.findUnique({
+      where: { id: projectId },
+      include: { allocations: true }
+    });
+    if (!project) {
+      return res.status(404).json({ error: "Proposed project not found" });
+    }
+
+    const boardId = targetBoardId || project.targetCampusId;
+    const spokeName = SPOKES[boardId]?.name || "Campus";
+
+    // Delete the allocation from the database
+    const matchingAlloc = project.allocations.find(a => a.targetCampusId === boardId);
+    if (matchingAlloc) {
+      await prisma.allocation.delete({
+        where: { id: matchingAlloc.id }
+      });
+    }
+
+    // Refresh allocations from database
+    const updatedAllocations = await prisma.allocation.findMany({
+      where: { projectId: project.id }
+    });
+
+    let updatedFields = {};
+    if (updatedAllocations.length === 0) {
+      updatedFields = {
+        status: "Pending Assignment",
+        assignedTo: null,
+        targetCampusId: null,
+        proposedDueDate: null,
+        assignedKey: null
+      };
+    } else {
+      const first = updatedAllocations[0];
+      updatedFields = {
+        status: first.status,
+        assignedTo: first.assignedTo,
+        targetCampusId: first.targetCampusId,
+        proposedDueDate: first.proposedDueDate,
+        assignedKey: first.jiraEpicKey
+      };
+    }
+
+    const finalProject = await prisma.project.update({
+      where: { id: project.id },
+      data: updatedFields
+    });
+
+    console.log(`Project proposal ${project.title} declined by ${spokeName} in PostgreSQL.`);
+
+    res.json({
+      success: true,
+      message: `Project proposal successfully declined by ${spokeName}.`,
+      status: finalProject.status
+    });
+  } catch (error) {
+    console.error("Decline Project Error:", error);
+    res.status(500).json({ error: "Failed to decline project proposal" });
   }
-
-  const boardId = targetBoardId || project.targetCampusId;
-  const spokeName = SPOKES[boardId]?.name || "Campus";
-
-  // Remove this specific spoke allocation
-  if (project.allocations) {
-    project.allocations = project.allocations.filter(a => a.targetCampusId !== boardId);
-  }
-
-  // Update root fields for backwards compatibility
-  if (!project.allocations || project.allocations.length === 0) {
-    project.status = "Pending Assignment";
-    project.assignedTo = null;
-    project.targetCampusId = null;
-    project.proposedDueDate = null;
-    project.assignedKey = null;
-  } else {
-    const first = project.allocations[0];
-    project.status = first.status;
-    project.assignedTo = first.assignedTo;
-    project.targetCampusId = first.targetCampusId;
-    project.proposedDueDate = first.proposedDueDate;
-    project.assignedKey = first.assignedKey;
-  }
-
-  console.log(`Project proposal ${project.title} declined by ${spokeName}.`);
-
-  res.json({
-    success: true,
-    message: `Project proposal successfully declined by ${spokeName}.`,
-    status: project.status
-  });
 });
 
+// Spoke Coordinator assigns Faculty Lead to an accepted project
+app.post("/spoke/project/:projectId/assign", async (req, res) => {
+  const { projectId } = req.params;
+  const { targetBoardId, facultyName } = req.body;
+
+  try {
+    const project = await prisma.project.findUnique({
+      where: { id: projectId },
+      include: { allocations: true }
+    });
+    if (!project) {
+      return res.status(404).json({ error: "Project not found" });
+    }
+
+    const allocation = project.allocations?.find(a => a.targetCampusId === targetBoardId);
+    if (!allocation) {
+      return res.status(404).json({ error: "Spoke allocation not found for this project" });
+    }
+
+    // Update allocation in database
+    const updatedAlloc = await prisma.allocation.update({
+      where: { id: allocation.id },
+      data: { assignedTo: facultyName }
+    });
+
+    // Refresh allocations list to sync root fields
+    const updatedAllocations = await prisma.allocation.findMany({
+      where: { projectId: project.id }
+    });
+
+    const first = updatedAllocations[0];
+    await prisma.project.update({
+      where: { id: project.id },
+      data: { assignedTo: first.assignedTo }
+    });
+
+    res.json({
+      success: true,
+      message: `Faculty successfully assigned to project in PostgreSQL.`,
+      allocation: updatedAlloc
+    });
+  } catch (error) {
+    console.error("Assign Faculty Error:", error);
+    res.status(500).json({ error: "Failed to assign faculty lead to project" });
+  }
+});
 
 
 // ==========================================
@@ -2029,7 +2137,9 @@ app.post("/moderator/alerts/check", async (req, res) => {
   const triggeredAlerts = [];
 
   try {
-    for (const project of companyProjectsIntake) {
+    const dbProjects = await prisma.project.findMany();
+
+    for (const project of dbProjects) {
       if (!project.assignedTo || !project.assignedKey) continue;
       
       const boardId = Object.keys(SPOKES).find(k => SPOKES[k].name === project.assignedTo);
@@ -2092,7 +2202,11 @@ app.post("/moderator/alerts/check", async (req, res) => {
       }
 
       if (isBreached) {
-        project.status = `Assigned (BREACHED - Incomplete)`;
+        // Update project status to BREACHED in PostgreSQL
+        await prisma.project.update({
+          where: { id: project.id },
+          data: { status: `Assigned (BREACHED - Incomplete)` }
+        });
         
         const warningBody = `
           ⚠️ URGENT DEADLINE BREACH WARNING - INCOMPLETE PROJECT
@@ -2180,18 +2294,51 @@ async function syncAcceptedProjectsWithJira() {
           const company = match[1].trim();
           const title = match[2].trim();
           
-          const project = companyProjectsIntake.find(p => 
-            p.company.toLowerCase() === company.toLowerCase() &&
-            p.title.toLowerCase() === title.toLowerCase()
-          );
+          const project = await prisma.project.findFirst({
+            where: {
+              company: { equals: company, mode: 'insensitive' },
+              title: { equals: title, mode: 'insensitive' }
+            },
+            include: { allocations: true }
+          });
           
           if (project) {
-            project.status = "Active";
-            project.assignedTo = spoke.name;
-            project.targetCampusId = boardId;
-            project.assignedKey = epic.key;
-            project.proposedDueDate = epic.fields.duedate || project.proposedDueDate;
-            console.log(`Synced accepted project: ${project.title} is Active at ${spoke.name} (Key: ${epic.key})`);
+            let allocation = project.allocations.find(a => a.targetCampusId === boardId);
+            const proposedDueDate = epic.fields.duedate || project.proposedDueDate || null;
+            
+            if (!allocation) {
+              await prisma.allocation.create({
+                data: {
+                  projectId: project.id,
+                  targetCampusId: boardId,
+                  assignedTo: spoke.name,
+                  status: "Active",
+                  proposedDueDate: proposedDueDate,
+                  jiraEpicKey: epic.key
+                }
+              });
+            } else {
+              await prisma.allocation.update({
+                where: { id: allocation.id },
+                data: {
+                  status: "Active",
+                  jiraEpicKey: epic.key,
+                  proposedDueDate: proposedDueDate
+                }
+              });
+            }
+
+            await prisma.project.update({
+              where: { id: project.id },
+              data: {
+                status: "Active",
+                assignedTo: spoke.name,
+                targetCampusId: boardId,
+                assignedKey: epic.key,
+                proposedDueDate: proposedDueDate
+              }
+            });
+            console.log(`Synced accepted project: ${project.title} is Active at ${spoke.name} (Key: ${epic.key}) (PostgreSQL sync).`);
           }
         }
       }
